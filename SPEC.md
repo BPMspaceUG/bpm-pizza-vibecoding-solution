@@ -78,10 +78,13 @@ the model must deal with in front of the customer.
 
 ### In
 
-- **Three transports over one core:**
+- **Two transports over one core:**
   - `cli` — interactive terminal chat.
-  - `web` — local FastAPI server on port 8888, browser chat UI.
-  - `voice` — LiveKit agent, browser client, full duplex speech.
+  - `web` — local FastAPI server on port 8888, browser chat UI, streaming the
+    agent's intermediate steps as newline-delimited JSON so tool calls and tool
+    results are visible and not just the final answer.
+- **Speech on the web transport**, served by a self-hosted CPU-only speech
+  container over HTTP. See *Speech*.
 - **Languages:** German and English. The agent answers in the language the
   customer used, per turn, without being told to switch.
 - **Menu, cart, customer, submit.** The full happy path plus correction
@@ -100,7 +103,7 @@ the model must deal with in front of the customer.
 - Switching pizzeria at runtime — one process serves one `PIZZERIA_ID`.
 - Any regex or keyword parser that produces an order without the model.
   See **Anti-patterns**; this is not a style preference, it is a hard ban.
-- Reading the whole menu aloud in the voice channel.
+- Reading the whole menu aloud when the answer will be spoken.
 - Persisting customer data anywhere beyond the process and the PizzaSim API.
 
 ---
@@ -117,7 +120,8 @@ never write to it, never create it, never print a value.
 | `PIZZASIM_URL` | PizzaSim API base URL |
 | `PIZZASIM_API_KEY` | Sent as header `X-API-Key` on protected routes |
 | `PIZZERIA_ID` | UUID of the pizzeria this process serves |
-| `AGENT_MODEL` | Model the ordering agent calls; required, no default in code |
+| `LITELLM_PIZZA_MODEL_1` | Model the ordering agent calls; required, no default in code |
+| `LITELLM_PIZZA_MODEL_2` | Second configured model, where the build uses one |
 
 Rules:
 
@@ -153,8 +157,8 @@ Facts that shape behaviour:
 
 - The tenant is **always** in the URL path, never in a header.
 - Customers are unique per pizzeria **by first name**. An unknown name silently
-  creates a new customer — so a misheard name creates a ghost. The voice channel
-  must therefore confirm the name explicitly.
+  creates a new customer — so a misheard name creates a ghost. Speech input must
+  therefore confirm the name explicitly.
 - `street_one` is optional and is **not** validated for deliverability. Asking
   for it is a policy of this agent, not an API requirement — do not pretend to
   the customer that we checked something we did not.
@@ -163,13 +167,13 @@ Facts that shape behaviour:
 
 ### Open contract questions
 
-The endpoints above are confirmed from the exercise material and from working
-code. The following must be resolved against the API documentation
-(`/swagger.html`) **before implementation starts**, and this section updated —
-guessing any of them produces a demo that breaks on the second order.
+The endpoints above are confirmed against working code. The following must be
+resolved against the live API and its documentation **before implementation
+starts**, and this section updated — guessing any of them produces a demo that
+breaks on the second order.
 
-1. **Order response field name.** The exercise text names `order_id`; existing
-   working code checks for `id`. One of the two is wrong. The confirmation
+1. **Order response field name.** `order_id` and `id` both appear in prior
+   material; only one is real. Verify against a live response. The confirmation
    message and the log record both depend on it.
 2. **Is there a list endpoint** for a pizzeria's orders
    (`GET /pizzerias/{id}/orders`)? The submit-timeout recovery path in
@@ -229,7 +233,7 @@ The model sees exactly these. Names, parameters and semantics are fixed.
 | `read_back` | — | basket, customer, revision — the text the agent must read out |
 | `confirm_order` | `revision` | state `CONFIRMED`, or error if stale |
 | `submit_order` | — | `order_id`, `status`, `eta_seconds` |
-| `check_street` | `street` | plausibility result (optional, voice only) |
+| `check_street` | `street` | plausibility result (optional) |
 
 Tool result conventions:
 
@@ -267,31 +271,54 @@ do not paste this section into the prompt verbatim.
 
 ---
 
-## The voice channel
+## Speech
 
-Voice is not a wrapper around the text agent; it is the same core with a
-different set of constraints on the words that come out.
+Speech is an input and an output method on the web channel. It is served by a
+**self-hosted speech service**, CPU-only, in its own container, reached over
+plain HTTP with an OpenAI-compatible surface:
 
-- **Transport:** LiveKit agent plus browser client. `AGENT_NAME` must match on
-  both sides and must be unique per running instance.
-- **Audio path:** STT and TTS run over the LiveKit stack. The LLM gateway proxies
-  chat completions only — do not attempt to route audio through it.
-- **Barge-in is mandatory.** The customer interrupts; TTS stops within 300 ms and
-  the partial utterance is discarded, not queued.
-- **Never read a list.** Menu questions are answered with at most three items and
-  an invitation ("…or tell me what you're in the mood for"). The full menu exists
-  in the web channel; in voice it is a conversation, not a recitation.
-- **Numbers as words.** "twenty-five minutes", not "25". Order ids are read in
-  groups with a pause, and offered again on request.
-- **Confirm the name by spelling** when STT confidence is low or the name is not
-  already a customer of this pizzeria — a misheard name creates a new customer
-  that nobody will ever find again.
-- **Latency budget:** first audible response ≤ 1.2 s after end of speech. Any
-  tool round trip longer than 800 ms is covered by a short filler utterance
-  chosen from a small set, never the same one twice in a row. No dead air beyond
-  2 s at any point.
-- **Failure is audible.** If STT returns nothing twice in a row, the agent says
-  so and offers the web channel — it does not sit silently.
+| Direction | Endpoint | Payload |
+|---|---|---|
+| STT | `POST {SPEECH_URL}/v1/audio/transcriptions` | multipart audio file + model + language |
+| TTS | `POST {SPEECH_URL}/v1/audio/speech` | JSON with model, voice, input text; returns audio |
+
+- **The speech service is the only speech path.** No external speech provider,
+  no hosted realtime framework, no audio through the LLM gateway — that gateway
+  carries chat completions only.
+- **No browser speech APIs.** `SpeechRecognition` and `speechSynthesis` are not
+  used. The previous implementation relied on them, which tied the product to
+  one browser vendor and sent customer audio to a third party. The service
+  replaces them.
+- **Nothing about the speech stack is written into source.** Base URL, STT
+  model, TTS model, voice and language all come from the environment, exactly
+  like the chat model:
+
+  | Variable | Purpose |
+  |---|---|
+  | `SPEECH_URL` | base URL of the self-hosted speech service |
+  | `SPEECH_STT_MODEL` | transcription model id |
+  | `SPEECH_TTS_MODEL` | synthesis model id |
+  | `SPEECH_TTS_VOICE` | voice id |
+
+- **Request/response, not streaming.** The customer records, the recording is
+  uploaded, the transcript comes back. Latency is visible and acceptable; do not
+  build partial-result handling, barge-in or turn detection on top of it — this
+  transport cannot do them, and pretending otherwise produces a broken feel.
+- **The microphone is push-to-talk.** It starts and stops on the customer's
+  action, never listens continuously. Recording state is visible in the UI at
+  all times.
+- **Synthesis is optional and off by default**, toggled by the customer, applied
+  only to the final assistant message and never to intermediate steps.
+- **Speech is never required.** If `SPEECH_URL` is unset or the service does not
+  answer, the microphone and the speaker toggle are not rendered and the web
+  channel stays fully usable as text. A speech failure is never an order failure.
+- **Speech shortens answers, it does not change them.** Same core, same tools,
+  same state machine. When a reply will be spoken: at most three menu items and
+  an invitation, times in minutes rather than seconds, order id read in groups.
+- **Confirm the name.** Transcription errors on names are the expensive failure:
+  customers are unique per pizzeria by first name, so a misheard name silently
+  creates a customer nobody will find again. Read the name back before
+  submitting.
 
 ---
 
@@ -349,45 +376,65 @@ matter of taste.
   actually made.
 - **One live smoke test**, opt-in via env flag: places a real order and asserts
   an `order_id` came back. This is the only test that touches the real API.
-- **Voice**, manual and scripted: barge-in mid-sentence, a name that needs
-  spelling, and a menu question — each with an expected observable behaviour.
+- **Speech**, manual: dictate an order, a name that needs correcting, and a
+  menu question — plus one run with `SPEECH_URL` unset, which must render a
+  usable text-only UI and place an order normally.
 
 ---
 
 ## Who builds this — and who judges it
 
-This spec is implemented inside the PizzaSim training environment. Two harnesses
-are installed there and their roles are **not** interchangeable.
+The build runs locally, on the operator's own subscriptions, with the most
+capable models available. Two harnesses take part and their roles are **not**
+interchangeable.
 
-| Role | Harness | Model | Permission |
-|---|---|---|---|
-| Implementer | Claude Code | set by the environment | writes every file |
-| Reviewer / judge | Codex | set by the environment | read-only, never writes |
+| Role | Permission |
+|---|---|
+| Implementer — one coding agent | writes every file |
+| Reviewer / judge — a second, independent agent | read-only, never writes |
 
-- **The model is deliberately not named in this spec.** Which weights sit behind
-  each harness is environment configuration and differs between environments —
-  a training simulator may proxy both harnesses onto third-party models, another
-  environment may run them on their vendors' own. Read the model from
-  configuration. Never hardcode it, never assume a default, and never write a
-  model name into code, prompts, tests or documentation.
-- **Harness is not model.** A harness does not necessarily run on the weights of
-  the company that built it. Never ask an agent which model it is — a
-  self-report is not evidence, the configuration is binding.
-- **Both sides may run inexpensive models.** That is a constraint to design for,
-  not an obstacle to work around: it is why review requests must be short,
-  stateless and self-contained, and why the rubric is numeric.
-- **Claude Code is the only thing that develops.** Every artefact in
-  *Deliverables* is produced by it. No second implementer, no other model
-  writing "just this one file", no hand-patched fixes smuggled in between rounds.
-- **Codex never writes the code it judges.** It runs read-only and plays two
-  roles in the same call: *devil's advocate* — attack the work, find gaps, wrong
-  assumptions, missing error cases — and *judge*, scoring against the fixed
+Which products and which models fill these two roles is the operator's decision
+and is deliberately left out of this spec. Naming them would tie the build to
+tools that will be replaced long before the product is. The roles and the
+protocol below are binding; the tooling is not.
+
+### Two model domains, never mixed
+
+The models that build this project and the models it calls at runtime are
+unrelated, and confusing them is the easiest way to break the build.
+
+- **Build-time models** power the harnesses. Configured outside this repository,
+  **none of this spec's business**. Nothing in the deliverables reads them,
+  references them, or depends on them.
+- **Runtime models** are what the ordering agent calls while serving a customer:
+  `LITELLM_PIZZA_MODEL_1` and `LITELLM_PIZZA_MODEL_2` from the environment.
+
+Binding consequences:
+
+- The implementer must **never** wire the agent to whatever model the implementer
+  itself happens to run on, and must never copy a build-time model name into
+  source, config, prompts, tests or documentation.
+- No model name of any kind is hardcoded. The runtime model is read from the
+  environment at startup; a missing value is a startup failure, not a default.
+- **Harness is not model.** Never ask an agent which model it is — a self-report
+  is not evidence, the configuration is binding.
+- Whatever the build runs on, it does not lower the bar. Do not simplify the
+  design, skip a test, or accept a weaker answer on the assumption that the model
+  behind you is limited.
+- **One implementer, and nothing else develops.** Every artefact in
+  *Deliverables* comes from it. No second implementer, no other agent writing
+  "just this one file", no hand-patched fixes smuggled in between rounds.
+- **The reviewer never writes the code it judges.** It runs read-only and plays
+  two roles in the same call: *devil's advocate* — attack the work, find gaps,
+  wrong assumptions, missing error cases — and *judge*, scoring against the fixed
   rubric below so that quality is measurable across rounds instead of a vibe.
+- **The reviewer is a different agent from the implementer.** Independence is the
+  point; a model reviewing its own output is not a review.
 
 ### Review protocol
 
-Reviewer calls are **stateless** — nothing is remembered between rounds, so every
-request must be short and self-contained. Commit before each review so the
+Reviewer calls are **stateless** — a fresh reviewer sees nothing of the previous
+round, so every request must carry its own context and be self-contained. Commit before each review so the
 reviewer always sees a committed tree.
 
 ```
@@ -437,7 +484,7 @@ then run it once.
 2. **Agent loop.** Model, tools, system prompt, one turn end to end.
 3. **CLI.** Full conversation, real API, an order visible in the dashboard.
 4. **Web.** FastAPI on 8888, same core, streamed intermediate steps visible.
-5. **Voice.** LiveKit agent and client, voice-specific policy, latency budget.
+5. **Speech.** Wire the speech service into the web UI, spoken-answer policy.
 6. **Harden.** Walk the error table, force each case, fix what breaks.
 
 After each pass, review your own work as if you were the reviewer who has to
@@ -464,7 +511,7 @@ improve.
 ├── channels/
 │   ├── cli.py
 │   ├── web.py               ← FastAPI, port 8888
-│   └── voice/               ← LiveKit agent + client config
+│   └── static/              ← web UI incl. speech input/output
 ├── prompts/
 │   ├── system.de.md
 │   └── system.en.md
@@ -487,16 +534,18 @@ improve.
 | Submit | Single call, only from `CONFIRMED`, never auto-retried |
 | Menu | Fetched live per session, no fallback list |
 | Tenant | One `PIZZERIA_ID` per process, from env, never hardcoded |
-| Transports | One core, three channels, no logic in the channels |
+| Transports | One core, two channels (CLI, web), no logic in the channels |
+| Speech | Self-hosted container, OpenAI-compatible HTTP; no vendor, no browser API |
 | Languages | DE + EN, mirrored per turn |
 | Confirmation | Mandatory read-back tied to a basket revision |
 | Parsing | The model parses. No regex order parser, ever. |
 | HTTP | A real client with timeouts. No `subprocess curl`. |
 | Persistence | None beyond the process and the PizzaSim API |
 | Errors | Typed in code, plain language to the customer |
-| Implementer | Claude Code only — nothing else writes code |
-| Reviewer | Codex, read-only, devil's advocate and judge in one |
+| Implementer | One agent only — nothing else writes code |
+| Reviewer | A second, independent agent, read-only, judge and devil's advocate |
 | Models | Never named, never hardcoded — environment configuration |
+| Build tooling | Not specified here; the operator picks it |
 | Definition of done | The judge approved, not "it runs" |
 
 ## Decisions deferred
