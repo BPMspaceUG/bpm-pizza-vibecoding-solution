@@ -270,6 +270,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             <h1>🍕 {{pizzeria_name}}</h1>
         </div>
         <div class="header-center">
+            <a href="https://www.aipizzasim.com/dashboard/pizzerias/{{pizzeria_id}}" target="_blank" class="dashboard-link">📊 Dashboard</a>
             <select class="pizzeria-select" id="pizzeriaSelect">
                 {{pizzeria_options}}
             </select>
@@ -537,9 +538,8 @@ def load_pizzerias_from_api():
     return PIZZERIAS
 
 def render_html(pizzeria_path='/', lang='de-DE'):
-    # Reload pizzerias if empty (for development)
-    if not PIZZERIAS:
-        load_pizzerias_from_api()
+    # Always reload pizzerias to ensure we have latest data
+    load_pizzerias_from_api()
 
     pizzeria_data = PIZZERIAS.get(pizzeria_path, list(PIZZERIAS.values())[0] if PIZZERIAS else ('PizzaSim', ''))
     name = pizzeria_data[0]
