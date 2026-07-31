@@ -165,30 +165,50 @@ Facts that shape behaviour:
 - `POST` is **not idempotent**. A retry after a timeout can double the order.
   See **Error handling**.
 
-### Open contract questions
+### Contract facts — verified against the live API (2026-07-31)
 
-The endpoints above are confirmed against working code. The following must be
-resolved against the live API and its documentation **before implementation
-starts**, and this section updated — guessing any of them produces a demo that
-breaks on the second order.
+All seven former open questions were resolved by probing the live API
+(`GET /menu`, `GET /pizzerias`, `POST /pizzerias/{id}/orders` — valid and
+invalid bodies —, `GET /pizzerias/{id}/orders`, `GET /location`). Facts below
+are from real responses, not documentation.
 
-1. **Order response field name.** `order_id` and `id` both appear in prior
-   material; only one is real. Verify against a live response. The confirmation
-   message and the log record both depend on it.
-2. **Is there a list endpoint** for a pizzeria's orders
-   (`GET /pizzerias/{id}/orders`)? The submit-timeout recovery path in
-   *Error handling* requires it. Without it, a timed-out submit cannot be
-   verified and the only honest option is to tell the customer.
-3. **Menu item shape.** Which fields besides `code` — display name, per
-   language? price? ingredients? The read-back text and the candidate
-   suggestions on `unknown_item` are built from these.
-4. **`extras[]`** — a controlled vocabulary or free text? If controlled,
-   validate like item codes; if free text, do not pretend to validate.
-5. **Error bodies** on `4xx` / `422` — is there a machine-readable field the
-   tool layer can map to typed errors, or only a message?
-6. **Status values** and their order in the lifecycle.
-7. **`GET /location?street=`** — response shape and what a negative result
-   actually means.
+1. **Order response field name: `order_id`.** A successful
+   `POST /pizzerias/{id}/orders` returns
+   `{"order_id": "<uuid>", "status": "ordered", "eta_seconds": <int>}`.
+   The **list** endpoint uses `id` for the same value — the two names coexist,
+   one per endpoint.
+2. **The list endpoint exists.** `GET /pizzerias/{id}/orders` (auth:
+   `X-API-Key`) returns `{"orders": [...]}`, newest first, each with `id`,
+   `customer_id`, `created_at`, `ready_at`, `status`, `delivered_at`,
+   `first_name`. It does **not** include items, so submit-timeout recovery
+   matches on `first_name` + `created_at` recency.
+3. **Menu item shape:** `{"code", "name", "base": [ingredients], "price"}`.
+   `name` is a single string (Italian proper names, identical in DE and EN) —
+   there are no per-language names in the API; read-back uses `name` as-is in
+   both languages. The menu response also carries a top-level `toppings[]`
+   array of ingredient codes.
+4. **`extras[]` is a controlled vocabulary:** the top-level `toppings[]` from
+   `GET /menu` (e.g. `mozzarella`, `mushrooms`, `pineapple`). The server
+   rejects unknown extras with `422` (`"items[0].extras contains invalid
+   topping 'unicorn_dust'"`), so the tool layer validates extras against
+   `toppings[]` exactly like item codes.
+5. **Error bodies are machine-readable:**
+   `{"error": "<code>", "details": ["<human sentence>", ...]}` — e.g.
+   `{"error": "validation_failed", "details": ["items[0].code must be a valid
+   pizza code"]}` with HTTP 422. The tool layer maps `error` to typed errors
+   and may surface `details` to targeted questions.
+6. **Status values observed in the lifecycle:** `ordered` →
+   `prepared_planned` → `delivered` (with `delivered_at` set on the last).
+   A fresh order starts as `ordered`.
+7. **`GET /location?street=` returns** `{"street": "<echo>",
+   "deliverable": <bool>}` with HTTP 200. In probing, even a nonsense street
+   returned `deliverable: true` — the check is a weak plausibility signal at
+   best, which confirms the policy above: never tell the customer an address
+   was verified.
+
+Additional verified fact: item `code`s are unique **per type**, not globally —
+`tonno` exists as both a pizza and a pasta. Validation and removal must always
+key on `(type, code)`.
 
 ---
 
