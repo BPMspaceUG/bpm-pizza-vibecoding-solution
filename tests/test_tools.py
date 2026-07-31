@@ -1,0 +1,382 @@
+"""Tool layer against recorded fixtures. No network, no LLM.
+
+Includes the one opt-in live smoke test (PIZZA_LIVE_TEST=1)."""
+import json
+import os
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+
+from core import state, tools
+from core.menu import Menu, MenuError
+from core.order import Customer, Order, State
+from core.pizzasim import (
+    ApiTimeout,
+    AuthError,
+    NotFoundError,
+    PizzaSim,
+    ServerError,
+    ValidationError,
+)
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def fixture(name):
+    return json.loads((FIXTURES / name).read_text())
+
+
+@pytest.fixture
+def menu():
+    return Menu(fixture("menu.json"))
+
+
+# --- menu validation ------------------------------------------------------
+
+def test_known_codes(menu):
+    assert menu.display_name("pizza", "margherita") == "Margherita"
+    assert menu.display_name("pasta", "pesto") == "Pasta Pesto"
+
+
+def test_tonno_collision_is_per_type(menu):
+    """Codes are unique per type, not globally."""
+    assert menu.display_name("pizza", "tonno") == "Tonno"
+    assert menu.display_name("pasta", "tonno") == "Pasta Tonno"
+
+
+def test_unknown_code_gives_candidates(menu):
+    with pytest.raises(MenuError) as e:
+        menu.display_name("pizza", "margarita")  # misspelt
+    assert e.value.code == "unknown_item"
+    assert 1 <= len(e.value.candidates) <= 3
+    assert e.value.candidates[0]["code"] == "margherita"
+
+
+def test_wrong_type_falls_back_to_other_type(menu):
+    with pytest.raises(MenuError) as e:
+        menu.display_name("pasta", "hawaii")
+    codes = [c["code"] for c in e.value.candidates]
+    assert "hawaii" in codes  # found as pizza
+
+
+def test_extras_controlled_vocabulary(menu):
+    menu.validate_extras(["mushrooms", "pineapple"])  # ok
+    with pytest.raises(MenuError) as e:
+        menu.validate_extras(["unicorn_dust"])
+    assert e.value.code == "invalid_extra"
+
+
+# --- pizzasim client typed errors (httpx MockTransport) -------------------
+
+def client_returning(handler):
+    return PizzaSim("http://test", "key", "pz-1",
+                    transport=httpx.MockTransport(handler))
+
+
+def respond(status, body):
+    return lambda request: httpx.Response(status, json=body)
+
+
+def test_auth_error_mapped():
+    with pytest.raises(AuthError):
+        client_returning(respond(401, {})).get_menu()
+    with pytest.raises(AuthError):
+        client_returning(respond(403, {})).get_menu()
+
+
+def test_404_mapped():
+    with pytest.raises(NotFoundError):
+        client_returning(respond(404, {})).list_orders()
+
+
+def test_422_mapped_with_details():
+    with pytest.raises(ValidationError) as e:
+        client_returning(
+            respond(422, fixture("error_422.json"))
+        ).submit_order({"first_name": "X"}, [])
+    assert "valid pizza code" in e.value.details[0]
+
+
+def test_5xx_mapped():
+    with pytest.raises(ServerError):
+        client_returning(respond(500, {})).get_menu()
+
+
+def test_timeout_mapped():
+    def handler(request):
+        raise httpx.ConnectTimeout("boom")
+    with pytest.raises(ApiTimeout):
+        client_returning(handler).get_menu()
+
+
+def test_pizzeria_name_startup_check():
+    payload = fixture("pizzerias.json")
+    good = PizzaSim("http://test", "key",
+                    payload["pizzerias"][0]["id"],
+                    transport=httpx.MockTransport(respond(200, payload)))
+    assert good.pizzeria_name() == payload["pizzerias"][0]["name"]
+    bad = client_returning(respond(200, payload))
+    with pytest.raises(NotFoundError):
+        bad.pizzeria_name()
+
+
+def test_submit_parses_order_created():
+    client = client_returning(respond(200, fixture("order_created.json")))
+    result = client.submit_order({"first_name": "Marco"}, [])
+    assert result["order_id"] and result["status"] == "ordered"
+    assert isinstance(result["eta_seconds"], int)
+
+
+# --- dispatch -------------------------------------------------------------
+
+class FakeClient:
+    """Scripted stand-in for PizzaSim in dispatch tests."""
+
+    def __init__(self):
+        self.submits = 0
+        self.submit_effect = lambda: fixture("order_created.json")
+        self.orders = []
+        self.list_effect = None  # exception to raise, if any
+
+    def submit_order(self, customer, items):
+        self.submits += 1
+        return self.submit_effect()
+
+    def list_orders(self):
+        if self.list_effect:
+            raise self.list_effect
+        return self.orders
+
+    def check_street(self, street):
+        return {"street": street, "deliverable": True}
+
+
+@pytest.fixture
+def fake():
+    return FakeClient()
+
+
+def ready_order(menu, fake):
+    order = Order()
+    tools.dispatch(order, menu, fake, "add_items",
+                   {"items": [{"type": "pizza", "code": "margherita",
+                               "qty": 2}]})
+    tools.dispatch(order, menu, fake, "set_customer",
+                   {"first_name": "Marco", "street_one": "via Roma"})
+    return order
+
+
+def confirmed_order(menu, fake):
+    order = ready_order(menu, fake)
+    tools.dispatch(order, menu, fake, "read_back", {})
+    tools.dispatch(order, menu, fake, "confirm_order",
+                   {"revision": order.revision})
+    assert order.state is State.CONFIRMED
+    return order
+
+
+def test_every_success_carries_full_snapshot(menu, fake):
+    order = Order()
+    result = tools.dispatch(order, menu, fake, "get_menu", {})
+    assert result["snapshot"]["state"] == "EMPTY"
+    assert result["menu"]["toppings"]
+    result = tools.dispatch(order, menu, fake, "add_items",
+                            {"items": [{"type": "pizza",
+                                        "code": "margherita", "qty": 1}]})
+    snap = result["snapshot"]
+    assert snap["items"][0]["name"] == "Margherita"
+    assert snap["state"] == "COLLECTING" and snap["revision"] == 1
+    assert snap["customer"] is None and snap["read_back_done"] is False
+
+
+def test_unknown_item_error_shape(menu, fake):
+    result = tools.dispatch(Order(), menu, fake, "add_items",
+                            {"items": [{"type": "pizza", "code": "margarita",
+                                        "qty": 1}]})
+    err = result["error"]
+    assert err["code"] == "unknown_item"
+    assert err["candidates"][0]["code"] == "margherita"
+    assert err["message"]  # speakable
+
+
+def test_add_is_atomic(menu, fake):
+    order = Order()
+    result = tools.dispatch(order, menu, fake, "add_items",
+                            {"items": [
+                                {"type": "pizza", "code": "margherita",
+                                 "qty": 1},
+                                {"type": "pizza", "code": "nope", "qty": 1},
+                            ]})
+    assert result["error"]["code"] == "unknown_item"
+    assert order.items == [] and order.state is State.EMPTY
+
+
+def test_invalid_quantity_not_parsed(menu, fake):
+    """A tool that receives "zwei" returns invalid_quantity."""
+    for bad in ("zwei", 2.5, 0, -1, True, None):
+        result = tools.dispatch(Order(), menu, fake, "add_items",
+                                {"items": [{"type": "pizza",
+                                            "code": "margherita",
+                                            "qty": bad}]})
+        assert result["error"]["code"] == "invalid_quantity", bad
+
+
+def test_invalid_extra_via_dispatch(menu, fake):
+    result = tools.dispatch(Order(), menu, fake, "add_items",
+                            {"items": [{"type": "pizza",
+                                        "code": "margherita", "qty": 1,
+                                        "extras": ["unicorn_dust"]}]})
+    assert result["error"]["code"] == "invalid_extra"
+
+
+def test_remove_semantics(menu, fake):
+    order = ready_order(menu, fake)
+    result = tools.dispatch(order, menu, fake, "remove_item",
+                            {"type": "pizza", "code": "margherita",
+                             "qty": 1})
+    assert result["snapshot"]["items"][0]["qty"] == 1
+    result = tools.dispatch(order, menu, fake, "remove_item",
+                            {"type": "pizza", "code": "margherita"})
+    assert result["snapshot"]["items"] == []
+    assert result["snapshot"]["state"] == "EMPTY"
+
+
+def test_submit_success(menu, fake):
+    order = confirmed_order(menu, fake)
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["order_id"] == fixture("order_created.json")["order_id"]
+    assert result["status"] == "ordered"
+    assert isinstance(result["eta_seconds"], int)
+    assert result["snapshot"]["state"] == "SUBMITTED"
+
+
+def test_submit_outside_confirmed_is_tool_error(menu, fake):
+    """Invariant 1: no helpful auto-confirmation."""
+    order = ready_order(menu, fake)
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["error"]["code"] == "invalid_state"
+    assert fake.submits == 0
+
+
+def test_empty_basket_submit(menu, fake):
+    result = tools.dispatch(Order(), menu, fake, "submit_order", {})
+    assert result["error"]["code"] == "invalid_state"
+    assert result["error"]["message"] == "What can I get you?"
+
+
+def test_submit_timeout_then_recovery_via_list(menu, fake):
+    order = confirmed_order(menu, fake)
+    fake.submit_effect = lambda: (_ for _ in ()).throw(ApiTimeout("t"))
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["error"]["code"] == "submit_unknown"
+    assert order.state is State.CONFIRMED and order.submit_unknown
+
+    # the order did land — recovery must adopt it, not re-POST
+    fake.orders = [{"id": "recovered-1", "first_name": "Marco",
+                    "created_at": int(time.time()),
+                    "ready_at": int(time.time()) + 300,
+                    "status": "ordered"}]
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["order_id"] == "recovered-1"
+    assert order.state is State.SUBMITTED
+    assert fake.submits == 1  # never re-POSTed
+
+
+def test_submit_timeout_verified_absent_allows_one_retry(menu, fake):
+    order = confirmed_order(menu, fake)
+    fake.submit_effect = lambda: (_ for _ in ()).throw(ServerError("500"))
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["error"]["code"] == "submit_unknown"
+
+    fake.orders = [{"id": "old", "first_name": "Marco",
+                    "created_at": int(time.time()) - 7200,
+                    "ready_at": 0, "status": "delivered"}]
+    fake.submit_effect = lambda: fixture("order_created.json")
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["snapshot"]["state"] == "SUBMITTED"
+    assert fake.submits == 2
+
+
+def test_submit_unknown_when_list_unavailable(menu, fake):
+    order = confirmed_order(menu, fake)
+    fake.submit_effect = lambda: (_ for _ in ()).throw(ApiTimeout("t"))
+    tools.dispatch(order, menu, fake, "submit_order", {})
+    fake.list_effect = ApiTimeout("t")
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["error"]["code"] == "submit_unknown"
+    assert fake.submits == 1  # honest message instead of blind retry
+
+
+def test_submit_422_keeps_basket(menu, fake):
+    order = confirmed_order(menu, fake)
+    fake.submit_effect = lambda: (_ for _ in ()).throw(
+        ValidationError(["items[0].code must be a valid pizza code"]))
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["error"]["code"] == "submit_failed"
+    assert "valid pizza code" in result["error"]["message"]
+    assert order.items  # basket kept
+
+
+def test_auth_error_no_retry(menu, fake):
+    order = confirmed_order(menu, fake)
+    fake.submit_effect = lambda: (_ for _ in ()).throw(AuthError("401"))
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["error"]["code"] == "api_unavailable"
+    assert not order.submit_unknown  # not the retry path
+
+
+def test_street_omitted_from_submit_body(menu, fake):
+    order = Order()
+    tools.dispatch(order, menu, fake, "add_items",
+                   {"items": [{"type": "pizza", "code": "margherita",
+                               "qty": 1}]})
+    tools.dispatch(order, menu, fake, "set_customer",
+                   {"first_name": "Anna"})  # street declined
+    tools.dispatch(order, menu, fake, "read_back", {})
+    tools.dispatch(order, menu, fake, "confirm_order",
+                   {"revision": order.revision})
+    captured = {}
+
+    def submit_effect():
+        return fixture("order_created.json")
+    fake.submit_effect = submit_effect
+    real_submit = fake.submit_order
+
+    def spy(customer, items):
+        captured.update(customer=customer, items=items)
+        return real_submit(customer, items)
+    fake.submit_order = spy
+    tools.dispatch(order, menu, fake, "submit_order", {})
+    assert captured["customer"] == {"first_name": "Anna"}
+
+
+def test_check_street(menu, fake):
+    result = tools.dispatch(Order(), menu, fake, "check_street",
+                            {"street": "via Roma"})
+    assert result["deliverable"] is True and "snapshot" in result
+
+
+# --- live smoke test (opt-in) ---------------------------------------------
+
+@pytest.mark.skipif(os.environ.get("PIZZA_LIVE_TEST") != "1",
+                    reason="live test only with PIZZA_LIVE_TEST=1")
+def test_live_order_smoke():
+    client = PizzaSim.from_env()
+    menu = Menu(client.get_menu())
+    order = Order()
+    fake_free = client  # the real thing, on purpose
+    for name, args in [
+        ("add_items", {"items": [{"type": "pizza", "code": "margherita",
+                                  "qty": 1}]}),
+        ("set_customer", {"first_name": "SmokeTest"}),
+        ("read_back", {}),
+    ]:
+        result = tools.dispatch(order, menu, fake_free, name, args)
+        assert "error" not in result, result
+    result = tools.dispatch(order, menu, fake_free, "confirm_order",
+                            {"revision": order.revision})
+    assert "error" not in result
+    result = tools.dispatch(order, menu, fake_free, "submit_order", {})
+    assert result.get("order_id"), result
