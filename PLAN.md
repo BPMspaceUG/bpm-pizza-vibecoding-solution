@@ -43,7 +43,7 @@ core/
                read-back tracking, submit bookkeeping. Pure data + snapshots.
   state.py     OrderState enum + transition functions. Every mutation goes
                through here; illegal transitions raise TransitionError.
-  menu.py      Menu snapshot (pizzas, pasta, toppings) fetched once per
+  menu.py      Immutable Menu snapshot (pizzas, pasta, toppings), one per
                session; (type, code) validation; extras validation;
                candidate suggestions via difflib over codes and names.
   pizzasim.py  httpx client for PizzaSim: get_menu, list_orders,
@@ -89,9 +89,16 @@ Each module owns its own env vars and exposes `from_env()`:
 
 | Module | Vars |
 |---|---|
-| `core/agent.py` | `LITELLM_PIZZA_URL`, `LITELLM_PIZZA_KEY`, `LITELLM_PIZZA_MODEL_1` (required; `LITELLM_PIZZA_MODEL_2` read but unused — single-model build) |
-| `core/pizzasim.py` | `PIZZASIM_URL`, `PIZZASIM_API_KEY`, `PIZZERIA_ID` |
+| `core/agent.py` | `LITELLM_PIZZA_URL`, `LITELLM_PIZZA_KEY`, `LITELLM_PIZZA_MODEL_1`, `PIZZERIA_LANG` (all required; `LITELLM_PIZZA_MODEL_2` read but unused — single-model build) |
+| `core/pizzasim.py` | `PIZZASIM_URL`, `PIZZASIM_API_KEY`, `PIZZERIA_ID` (required) |
 | `channels/web.py` | `SPEECH_URL`, `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL`, `SPEECH_TTS_VOICE` (all optional; absence disables speech) |
+
+`PIZZERIA_LANG` ∈ {`de`, `en`} is the pizzeria-country greeting language.
+The live API exposes no country field (verified), so per the config-from-env
+rule this deployment fact is a **required** env var — no default, missing →
+startup failure like any other required var (oracle decision,
+`decisions/qa.md`). It selects the system prompt file and the STT language
+hint; it never overrides per-turn language mirroring.
 
 Loading order: process env wins; else `~/.env` if present (parsed key=value,
 never written, never printed). No other sources. A missing required var
@@ -107,7 +114,16 @@ Startup sequence, identical for both channels, all before the first turn:
    404-pizzeria case from the error table → process refuses to start;
    otherwise capture `pizzeria_name` for the system prompt.
 3. `GET /menu` — failure aborts startup with "We're not taking orders right
-   now". Success stores the session menu snapshot.
+   now".
+
+**Session model.** A session (conversation) = one `Order` + one immutable
+`Menu` snapshot + one message history, bundled in a `Session` object owned
+by the channel. The CLI process is exactly one session and reuses the
+startup menu fetch as its snapshot. The web channel creates a `Session` per
+`session_id`, fetching a **fresh menu snapshot at session creation**; that
+snapshot is immutable for the session's lifetime (spec invariant 5: "menu
+snapshot fetched this session"). A failed session-creation fetch yields the
+"We're not taking orders right now" message for that session only.
 
 ## Order state machine
 
@@ -116,8 +132,10 @@ States: `EMPTY`, `COLLECTING`, `READY`, `CONFIRMED`, `SUBMITTED`.
 Order fields: `items: list[Item(type, code, qty, extras)]`,
 `customer: Customer(first_name, street_one) | None`, `revision: int`
 (increments on every basket or customer mutation), `read_back_revision:
-int | None` (set by `read_back`), `state`, `submit_unknown: bool` (a submit
-attempt timed out and is unverified), `result` (order_id, status,
+int | None` (set by `read_back`), `state`, `submit_attempted_at: int | None`
+(unix seconds captured immediately **before** the first submit POST — the
+correlation key for timeout recovery), `submit_unknown: bool` (that attempt
+timed out / 5xx'd and is unverified), `result` (order_id, status,
 eta_seconds after submit).
 
 Derived-state rule after any legal mutation: `SUBMITTED` is terminal and
@@ -147,33 +165,36 @@ Transition table (✓ legal, ✗ → typed error):
 same revision — exactly the spec's path, nothing broader. Every ✗ cell gets
 a unit test (invariants 1–5).
 
-Submit-timeout path: on httpx timeout or 5xx from the submit POST, the order
-stays `CONFIRMED` with `submit_unknown = True`. The next `submit_order` call
-first calls `list_orders()` and looks for an order with our customer's
-`first_name` and `created_at >=` the first attempt's start time. Found →
-adopt its `id` as order_id, state `SUBMITTED`, message says the order went
-through. Not found → one real retry is allowed. List endpoint itself fails →
-error `submit_unknown` with an honest message ("I'm not sure that went
-through — let me check" phrasing); never a blind re-POST.
+Submit-timeout path: `submit_order` sets `submit_attempted_at = now()`
+before its first POST. On httpx timeout or 5xx, the order stays `CONFIRMED`
+with `submit_unknown = True`. The next `submit_order` call sees
+`submit_unknown` and first calls `list_orders()`, looking for an order with
+our customer's `first_name` and `created_at >= submit_attempted_at - 60`
+(60s clock-skew allowance). Found → adopt its `id` as order_id, state
+`SUBMITTED`, message says the order went through. Not found → exactly one
+real retry. List endpoint itself fails → error `submit_unknown` with an
+honest message ("I'm not sure that went through — let me check" phrasing);
+never a blind re-POST.
 
 ## Tool schemas
 
-All eight tools, OpenAI function-calling format. Parameters:
+All eight tools, OpenAI function-calling format.
 
-| Tool | Parameters (JSON schema) | Success result |
+`SNAPSHOT` (one fixed shape, embedded in **every** success result — this is
+how the per-tool return table and the "full current state" rule compose):
+`{state, revision, items: [{type, code, name, qty, extras}], customer:
+{first_name, street_one} | null, read_back_done: bool}` — never a diff.
+
+| Tool | Parameters (JSON schema) | Success result — exact JSON |
 |---|---|---|
-| `get_menu` | `{}` | `{pizzas: [{code, name}], pasta: [{code, name}], toppings: [...]}` — `name` is the API's single display name, which the verified contract facts show serves both languages |
-| `add_items` | `{items: [{type: enum[pizza,pasta], code: str, qty: int ≥1, extras: [str]}]}` (required: items; extras default `[]`) | snapshot |
-| `remove_item` | `{type: enum, code: str, qty: int ≥1 optional}` (absent qty = remove all of that line) | snapshot |
-| `set_customer` | `{first_name: str minLength 1, street_one: str optional}` | customer as stored + snapshot |
-| `read_back` | `{}` | snapshot (basket, customer, revision) — the material the agent reads out |
-| `confirm_order` | `{revision: int}` | snapshot (state CONFIRMED), or error if stale |
-| `submit_order` | `{}` | `{order_id, status, eta_seconds}` — the minutes conversion is the model's job, instructed by the prompt |
-| `check_street` | `{street: str}` | `{street, deliverable}` — the never-claim-verified rule lives in the prompt, not the tool |
-
-Snapshot shape (every success): `{state, revision, items: [{type, code, name,
-qty, extras}], customer: {first_name, street_one} | null, read_back_done:
-bool}` — full current state, never a diff.
+| `get_menu` | `{}` | `{"menu": {"pizzas": [{code, name}], "pasta": [{code, name}], "toppings": [str]}, "snapshot": SNAPSHOT}` — `name` is the API's single display name, which the verified contract facts show serves both languages |
+| `add_items` | `{items: [{type: enum[pizza,pasta], code: str, qty: int ≥1, extras: [str]}]}` (required: items; extras default `[]`) | `{"snapshot": SNAPSHOT}` (basket + revision live in SNAPSHOT) |
+| `remove_item` | `{type: enum, code: str, qty: int ≥1 optional}` (absent qty = remove all of that line) | `{"snapshot": SNAPSHOT}` |
+| `set_customer` | `{first_name: str minLength 1, street_one: str optional}` | `{"customer": {first_name, street_one}, "snapshot": SNAPSHOT}` — customer as stored |
+| `read_back` | `{}` | `{"snapshot": SNAPSHOT}` — basket, customer, revision: the material the agent reads out |
+| `confirm_order` | `{revision: int}` | `{"snapshot": SNAPSHOT}` with `state == "CONFIRMED"`, or error if stale |
+| `submit_order` | `{}` | `{"order_id": str, "status": str, "eta_seconds": int, "snapshot": SNAPSHOT}` — the minutes conversion is the model's job, instructed by the prompt |
+| `check_street` | `{street: str}` | `{"street": str, "deliverable": bool, "snapshot": SNAPSHOT}` — the never-claim-verified rule lives in the prompt, not the tool |
 
 Failure shape: `{"error": {"code": "<one of the codes below>", "message":
 "<speakable sentence>", "candidates": [up to 3 of {type, code, name}]}}`.
@@ -194,14 +215,12 @@ pizza still gets a useful suggestion).
 ## Agent loop (`core/agent.py`)
 
 - Messages: `[system] + history`. System prompt = `prompts/system.{lang}.md`
-  with `{pizzeria_name}` substituted (captured in startup step 2). `lang` is
-  the pizzeria's country language — the greeting language the spec requires.
-  The live API exposes no country field (verified), so the deployment
-  default is `de`; this is a startup constant, **not** a channel or UI
-  control. Both prompt files state the same per-turn rule: always answer in
-  the language of the customer's latest message (German or English),
-  unprompted. Language mirroring is model behaviour; the runtime never
-  detects language.
+  with `{pizzeria_name}` substituted (captured in startup step 2), where
+  `lang = PIZZERIA_LANG` — the pizzeria-country greeting language, a
+  required env var (see Configuration), **not** a channel or UI control.
+  Both prompt files state the same per-turn rule: always answer in the
+  language of the customer's latest message (German or English), unprompted.
+  Language mirroring is model behaviour; the runtime never detects language.
 - Per turn: POST `{LITELLM_PIZZA_URL}/chat/completions`, bearer
   `LITELLM_PIZZA_KEY`, model `LITELLM_PIZZA_MODEL_1`, `tools` = the eight
   schemas. While the response contains `tool_calls`: dispatch each through
@@ -234,14 +253,16 @@ an invitation.
 
 ## Web channel protocol
 
-- `GET /` → static UI. `GET /config` → `{speech: bool, langs: ["de","en"]}`
-  (speech true only if `SPEECH_URL` set and a probe succeeded at startup).
-- `POST /chat` body `{session_id, text, lang}` → `application/x-ndjson`
-  stream of the agent-loop events, ending with
-  `{"type": "done", "state": ...}`. One `Order` per `session_id`, in-memory.
+- `GET /` → static UI. `GET /config` → `{speech: bool}` (true only if
+  `SPEECH_URL` set and a probe succeeded at startup). No language field:
+  language is never a UI control — the greeting comes from `PIZZERIA_LANG`,
+  mirroring is model behaviour.
+- `POST /chat` body `{session_id, text}` → `application/x-ndjson` stream of
+  the agent-loop events, ending with `{"type": "done", "state": ...}`.
 - `POST /speech/stt`: multipart audio forwarded to
-  `{SPEECH_URL}/v1/audio/transcriptions` with `SPEECH_STT_MODEL` and the
-  session language → `{text}`. `POST /speech/tts` body `{text}` forwarded to
+  `{SPEECH_URL}/v1/audio/transcriptions` with `SPEECH_STT_MODEL` and
+  `PIZZERIA_LANG` as the language hint (an STT hint only — it never
+  influences assistant output language) → `{text}`. `POST /speech/tts` body `{text}` forwarded to
   `{SPEECH_URL}/v1/audio/speech` with `SPEECH_TTS_MODEL` +
   `SPEECH_TTS_VOICE` → audio bytes. Proxying keeps the speech URL and
   models server-side.
@@ -276,8 +297,9 @@ an invitation.
   `fixtures/menu.json` and a fake PizzaSim client returning fixture
   payloads: unknown code candidates, per-type code collision (`tonno`),
   invalid extra, `"zwei"` quantity, atomic multi-item add, remove semantics,
-  submit success mapping (`order_id`, `eta_minutes`), submit timeout →
-  unknown → recovery-by-list, 422 mapping, snapshot completeness.
+  submit success mapping (`order_id`, `status`, `eta_seconds`), submit
+  timeout → unknown → recovery-by-list (correlation via
+  `submit_attempted_at`), 422 mapping, snapshot completeness.
 - `test_transcripts.py` + `transcripts/`: five golden conversations (happy
   path, correction "no make that three", unknown item, mind change after
   read-back, submit timeout) as JSON: each step = user text, scripted model
@@ -293,8 +315,9 @@ an invitation.
 1. **Scaffold + config.** `.env.example`, `requirements.txt`, README
    skeleton, gitignore for `logs/`, env loader (process env, else `~/.env`)
    with named-var `ConfigError`.
-   ☐ `.env.example` lists all 11 vars, names only ☐ missing var exits
-   pre-turn with var + file name ☐ nothing prints values.
+   ☐ `.env.example` lists all 12 vars (incl. `PIZZERIA_LANG`), names only
+   ☐ missing var exits pre-turn with var + file name ☐ nothing prints
+   values.
 2. **Order + state machine + tests.** `core/order.py`, `core/state.py`,
    `tests/test_state.py`.
    ☐ all five invariants tested ☐ every ✗ cell tested ☐ demotion +
