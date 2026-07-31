@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pizza bestellen</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">Pizza bestellen</h1>
+  <label id="tts-wrap" hidden>
+    <input type="checkbox" id="tts-toggle"> Antworten vorlesen
+  </label>
+</header>
+
+<main id="chat" aria-live="polite"></main>
+
+<form id="composer">
+  <button type="button" id="mic" hidden aria-pressed="false"
+          title="Push-to-talk: Klick startet, Klick stoppt">🎤</button>
+  <input id="text" autocomplete="off"
+         placeholder="Nachricht schreiben …" autofocus>
+  <button type="submit" id="send">Senden</button>
+</form>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

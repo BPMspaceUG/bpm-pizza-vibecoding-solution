@@ -123,17 +123,19 @@ class Agent:
                                    f"{type(exc).__name__}") from exc
         raise GatewayError("gateway timed out twice") from last_exc
 
-    def run_turn(self, session: Session, user_text: str,
+    def run_turn(self, session: Session, user_text: str | None,
                  emit=lambda event: None) -> str:
         """One customer turn: returns the assistant's final text. Every
-        intermediate step goes to emit() and the JSONL log."""
+        intermediate step goes to emit() and the JSONL log. user_text None
+        is the opening turn — the agent greets first, unprompted."""
 
         def event(payload: dict) -> None:
             log_event(session, payload)
             emit(payload)
 
-        session.messages.append({"role": "user", "content": user_text})
-        event({"type": "user", "text": user_text})
+        if user_text is not None:
+            session.messages.append({"role": "user", "content": user_text})
+            event({"type": "user", "text": user_text})
 
         for _ in range(MAX_TOOL_ROUNDS):
             try:
