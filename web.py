@@ -502,34 +502,35 @@ PIZZASIM_API_KEY = os.environ.get("PIZZASIM_API_KEY", "")
 PIZZERIAS = {}
 
 def load_pizzerias_from_api():
-    """Load available pizzerias from PizzaSim API."""
-    import requests
+    """Load available pizzerias from PizzaSim API using curl."""
+    import subprocess
+    import re
     global PIZZERIAS
 
     try:
-        headers = {}
+        cmd = ["curl", "-s", f"{PIZZASIM_URL}/pizzerias", "-H", "Accept: application/json"]
         if PIZZASIM_API_KEY:
-            headers["Authorization"] = f"Bearer {PIZZASIM_API_KEY}"
+            cmd.extend(["-H", f"X-API-Key: {PIZZASIM_API_KEY}"])
 
-        response = requests.get(f"{PIZZASIM_URL}/api/restaurants", headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        data = json.loads(result.stdout)
 
-        # Parse API response - expected format: [{"id": "uuid", "name": "Pizzeria Name", "slug": "name"}]
+        # Parse API response - format: {"pizzerias": [{"id": "uuid", "name": "Pizzeria Name"}]}
         PIZZERIAS = {}
-        for restaurant in data:
-            slug = restaurant.get("slug", restaurant.get("id", "unknown"))
+        for restaurant in data.get("pizzerias", []):
+            name = restaurant.get("name", "PizzaSim")
+            pid = restaurant.get("id", "")
+            # Generate slug from name: lowercase, replace spaces with dashes, remove special chars
+            slug = re.sub(r'[^a-z0-9-]+', '-', name.lower()).strip('-')
             path = f"/{slug}" if slug else "/"
-            PIZZERIAS[path] = (restaurant.get("name", "PizzaSim"), restaurant.get("id"))
+            PIZZERIAS[path] = (name, pid)
 
         if not PIZZERIAS:
-            # Fallback: at least provide root
             PIZZERIAS["/"] = ("PizzaSim", "86517183-e1a5-4bd7-b915-e0db8f8b2131")
 
     except Exception as e:
-        # Fallback on API error
         PIZZERIAS = {
-            '/': ('PizzaSim', '86517183-e1a5-4bd7-b915-e0db8f8b2131')
+            '/': ('PizzaSim', "86517183-e1a5-4bd7-b915-e0db8f8b2131")
         }
         print(f"Warning: Could not load pizzerias from API: {e}")
 
@@ -544,17 +545,23 @@ def render_html(pizzeria_path='/', lang='de-DE'):
     name = pizzeria_data[0]
     pizzeria_id = pizzeria_data[1]
 
-    # Generate pizzeria dropdown options
+    # Generate pizzeria dropdown options (with UUID)
     options = []
-    for path, (pname, _) in PIZZERIAS.items():
+    for path, (pname, pid) in PIZZERIAS.items():
         value = path if path != '/' else '/'
         selected = ' selected' if path == pizzeria_path else ''
-        options.append(f'<option value="{value}"{selected}>🍕 {pname}</option>')
+        short_id = pid[:8] if pid else 'unknown'
+        options.append(f'<option value="{value}"{selected}>🍕 {pname} ({short_id})</option>')
     pizzeria_options = '\n'.join(options) if options else '<option value="/">🍕 PizzaSim</option>'
 
     welcome = f'Willkommen bei {name}! Ich kann dir helfen, das Menü zu erkunden. Was möchtest du wissen?' if lang == 'de-DE' else f'Welcome to {name}! I can help you explore the menu. What would you like to know?'
     placeholder = 'Nachricht schreiben...' if lang == 'de-DE' else 'Type a message...'
     html = HTML_TEMPLATE.replace('{{pizzeria_name}}', name).replace('{{pizzeria_id}}', pizzeria_id).replace('{{pizzeria_path}}', pizzeria_path).replace('{{lang}}', lang).replace('{{welcome_message}}', welcome).replace('{{placeholder}}', placeholder).replace('{{pizzeria_options}}', pizzeria_options)
+
+    # Add UUID display in footer if we have a valid pizzeria
+    footer_uuid_html = f'<span id="pizzeriaUuid" title="Pizzeria ID" style="color: #666; font-family: monospace; font-size: 0.7rem;">{pizzeria_id}</span>' if pizzeria_id else ''
+    html = html.replace('id="footerLang">', f'id="footerLang">{footer_uuid_html} | ')
+
     return HTMLResponse(content=html)
 
 def get_pid_from_path(path):
