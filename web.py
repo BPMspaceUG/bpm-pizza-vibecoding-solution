@@ -9,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 
 from agent import run_agent
 
@@ -541,8 +542,33 @@ async def chat_root(request: Request):
     async def gen():
         # Run sync generator in threadpool to avoid blocking event loop
         try:
-            async for ev in run_in_threadpool(lambda: iter(run_agent(msg, msgs, pid=pid, lang=lang))):
-                yield json.dumps(ev) + "\n"
+            loop = asyncio.get_event_loop()
+            # Run the generator in a thread and collect results via queue
+            queue = asyncio.Queue()
+
+            def run_agent_thread():
+                try:
+                    for ev in run_agent(msg, msgs, pid=pid, lang=lang):
+                        asyncio.run_coroutine_threadsafe(queue.put(("event", ev)), loop)
+                    asyncio.run_coroutine_threadsafe(queue.put(("done", None)), loop)
+                except Exception as e:
+                    asyncio.run_coroutine_threadsafe(queue.put(("error", str(e))), loop)
+
+            import threading
+            thread = threading.Thread(target=run_agent_thread)
+            thread.start()
+
+            while True:
+                item = await queue.get()
+                if item[0] == "done":
+                    break
+                elif item[0] == "error":
+                    yield json.dumps({"step": "error", "content": item[1]}) + "\n"
+                    break
+                else:
+                    yield json.dumps(item[1]) + "\n"
+
+            thread.join()
         except Exception as e:
             yield json.dumps({"step": "error", "content": str(e)}) + "\n"
         finally:
@@ -574,8 +600,33 @@ async def chat_pizzeria(pizzeria: str, request: Request):
     async def gen():
         # Run sync generator in threadpool to avoid blocking event loop
         try:
-            async for ev in run_in_threadpool(lambda: iter(run_agent(msg, msgs, pid=pid, lang=lang))):
-                yield json.dumps(ev) + "\n"
+            loop = asyncio.get_event_loop()
+            # Run the generator in a thread and collect results via queue
+            queue = asyncio.Queue()
+
+            def run_agent_thread():
+                try:
+                    for ev in run_agent(msg, msgs, pid=pid, lang=lang):
+                        asyncio.run_coroutine_threadsafe(queue.put(("event", ev)), loop)
+                    asyncio.run_coroutine_threadsafe(queue.put(("done", None)), loop)
+                except Exception as e:
+                    asyncio.run_coroutine_threadsafe(queue.put(("error", str(e))), loop)
+
+            import threading
+            thread = threading.Thread(target=run_agent_thread)
+            thread.start()
+
+            while True:
+                item = await queue.get()
+                if item[0] == "done":
+                    break
+                elif item[0] == "error":
+                    yield json.dumps({"step": "error", "content": item[1]}) + "\n"
+                    break
+                else:
+                    yield json.dumps(item[1]) + "\n"
+
+            thread.join()
         except Exception as e:
             yield json.dumps({"step": "error", "content": str(e)}) + "\n"
         finally:

@@ -216,11 +216,24 @@ def build_system_prompt(pid, lang="de"):
     language_hint = "ANSWER IN ENGLISH." if lang.startswith("en") else "SPRACHE: ANTWORTE IMMER AUF DEUTSCH. NIE ENGLISCH."
     return SYSTEM_PROMPT_TEMPLATE.replace("{{PID}}", pid).replace("{{LANG}}", language_hint)
 
-MENU = {
-    "pizzas": ["margherita", "prosciutto", "salami", "funghi", "regina", "mista",
-               "hawaii", "tonno", "papa", "diavolo", "grandiosa"],
-    "pasta": ["aglioolio", "tonno", "funghi", "pesto"]
-}
+def get_menu_items():
+    """Dynamisch das Menü vom Server laden."""
+    menu_data = get_menu()
+    if "error" in menu_data:
+        # Fallback auf hardcodierte Werte
+        return {
+            "pizzas": ["margherita", "prosciutto", "salami", "funghi", "regina", "mista",
+                       "hawaii", "tonno", "papa", "diavolo", "grandiosa"],
+            "pasta": ["aglioolio", "tonno", "funghi", "pesto"]
+        }
+
+    pizzas = [p["code"] for p in menu_data.get("pizzas", [])]
+    pasta = [p["code"] for p in menu_data.get("pasta", [])]
+    return {"pizzas": pizzas, "pasta": pasta}
+
+
+# Cache für Menü-Items (wird bei Import geladen)
+MENU = get_menu_items()
 
 
 def parse_qty(text):
@@ -238,10 +251,11 @@ def parse_qty(text):
 
 
 def extract_name(msg):
-    """Extrahiere Vornamen aus 'Ich bin Marco' o.ä."""
+    """Extrahiere Vornamen aus 'Ich bin Marco', 'Hier ist Peter', etc."""
     patterns = [
         r'(?:ich bin|mein name ist|ich heiße|i am|my name is)\s+([A-ZÄÖÜ][a-zäöü]+)',
-        r'^([A-ZÄÖÜ][a-zäöü]+)(?:\s+hier|$)',
+        r'(?:hier ist|hier ist der|this is)\s+([A-ZÄÖÜ][a-zäöü]+)',
+        r'^([A-ZÄÖÜ][a-zäöü]+)(?:\s+hier|$|\s+am apparat|\s+am telefon)',
     ]
     for pat in patterns:
         m = re.search(pat, msg, re.I)
@@ -265,13 +279,24 @@ def try_parse_order(user_message, menu_items):
     items = []
     codes = menu_items["pizzas"] + menu_items["pasta"]
 
-    # Regex: Zahl + Code, z.B. "2 salami", "eine margherita"
+    # Verfolge bereits gematchte Positionen, um Duplikate zu vermeiden
+    matched_positions = set()
+
+    # Regex: Zahl + Code, z.B. "2 salami", "eine margherita", "2 pasta pesto"
     for code in codes:
         item_type = "pizza" if code in menu_items["pizzas"] else "pasta"
-        # Suche nach "2x salami", "eine Salami", "zwei salami"
-        pattern = rf'(\d+x?|\w+)\s+{re.escape(code)}[sb]*'
+        # Suche nach "2x salami", "eine Salami", "zwei salami", "1 pasta pesto", "2x pasta tonno"
+        # Optional: "pasta" vor dem Code für Pasta-Gerichte
+        prefix = rf'(pasta\s+)?' if item_type == "pasta" else rf'()'
+        pattern = rf'(\d+x?|\w+)\s+{prefix}{re.escape(code)}[sb]*'
         matches = re.finditer(pattern, msg_lower, re.I)
         for m in matches:
+            # Prüfe ob diese Position bereits gematcht wurde
+            pos = (m.start(), m.end())
+            if pos in matched_positions:
+                continue
+            matched_positions.add(pos)
+
             qty_str = m.group(1)
             qty = parse_qty(qty_str)
             items.append({"type": item_type, "code": code, "qty": qty, "extras": []})
