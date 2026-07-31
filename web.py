@@ -302,7 +302,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
     <div class="footer">
         <div class="footer-left">
             <span>🍕 PizzaSim Chat</span>
-            <span class="version-badge" id="versionBadge">v1.2</span>
+            <span class="version-badge" id="versionBadge">v1.3</span>
             <span id="footerStatus" style="color: #4a9c5e;">● Online</span>
         </div>
         <div class="footer-right">
