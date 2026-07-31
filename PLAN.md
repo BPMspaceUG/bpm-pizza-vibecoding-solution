@@ -93,14 +93,21 @@ Each module owns its own env vars and exposes `from_env()`:
 | `core/pizzasim.py` | `PIZZASIM_URL`, `PIZZASIM_API_KEY`, `PIZZERIA_ID` |
 | `channels/web.py` | `SPEECH_URL`, `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL`, `SPEECH_TTS_VOICE` (all optional; absence disables speech) |
 
-Loading order: process env wins; else `~/.env`, else `./.env` (parsed
-key=value, never written, never printed). A missing required var raises
-`ConfigError("LITELLM_PIZZA_URL is not set (expected in the environment or
-~/.env)")` and the channel exits before the first turn.
+Loading order: process env wins; else `~/.env` if present (parsed key=value,
+never written, never printed). No other sources. A missing required var
+raises `ConfigError("LITELLM_PIZZA_URL is not set (expected in the
+environment or ~/.env)")` and the channel exits before the first turn.
+Logs go to `./logs/` (fixed path, gitignored) — not configurable.
 
-Startup sequence (both channels): load config → `GET /menu` (fail fast:
-"We're not taking orders right now") → `GET /pizzerias/{PIZZERIA_ID}/orders`
-(404 → process refuses to start, per error table).
+Startup sequence, identical for both channels, all before the first turn:
+
+1. Load and validate all required env vars (exit naming var + file).
+2. `GET /pizzerias` with `X-API-Key` — a 401/403 aborts startup ("cannot
+   reach the kitchen system"); `PIZZERIA_ID` not in the returned list is the
+   404-pizzeria case from the error table → process refuses to start;
+   otherwise capture `pizzeria_name` for the system prompt.
+3. `GET /menu` — failure aborts startup with "We're not taking orders right
+   now". Success stores the session menu snapshot.
 
 ## Order state machine
 
@@ -128,14 +135,17 @@ Transition table (✓ legal, ✗ → typed error):
 | add_items | ✓ | ✓ | ✓ | ✓ demote | ✗ order_closed |
 | remove_item | ✗ empty_basket | ✓ | ✓ | ✓ demote | ✗ order_closed |
 | set_customer | ✓ | ✓ | ✓ | ✓ demote | ✗ order_closed |
-| read_back | ✗ empty_basket | ✓ | ✓ | ✓ | ✗ order_closed |
-| confirm_order | ✗ invalid_state | ✗ invalid_state (no customer) | ✓ | ✓ no-op if same revision | ✗ order_closed |
+| read_back | ✗ empty_basket | ✗ invalid_state (no customer yet) | ✓ | ✓ (same basket, idempotent) | ✗ order_closed |
+| confirm_order | ✗ invalid_state | ✗ invalid_state | ✓ | ✗ invalid_state (already confirmed) | ✗ order_closed |
 | submit_order | ✗ invalid_state | ✗ invalid_state | ✗ invalid_state | ✓ | ✗ order_closed |
 | get_menu / check_street | ✓ any state, read-only | | | | |
 
 `confirm_order(revision)` additionally requires `revision == order.revision`
 (else `stale_revision`) and `read_back_revision == order.revision` (else
-`read_back_required`). Every ✗ cell gets a unit test (invariants 1–5).
+`read_back_required`). So the only path into `CONFIRMED` is: state `READY`,
+`read_back` called at the current revision, then `confirm_order` naming that
+same revision — exactly the spec's path, nothing broader. Every ✗ cell gets
+a unit test (invariants 1–5).
 
 Submit-timeout path: on httpx timeout or 5xx from the submit POST, the order
 stays `CONFIRMED` with `submit_unknown = True`. The next `submit_order` call
@@ -152,14 +162,14 @@ All eight tools, OpenAI function-calling format. Parameters:
 
 | Tool | Parameters (JSON schema) | Success result |
 |---|---|---|
-| `get_menu` | `{}` | `{pizzas: [{code, name, ingredients, price}], pasta: [...], toppings: [...]}` |
+| `get_menu` | `{}` | `{pizzas: [{code, name}], pasta: [{code, name}], toppings: [...]}` — `name` is the API's single display name, which the verified contract facts show serves both languages |
 | `add_items` | `{items: [{type: enum[pizza,pasta], code: str, qty: int ≥1, extras: [str]}]}` (required: items; extras default `[]`) | snapshot |
 | `remove_item` | `{type: enum, code: str, qty: int ≥1 optional}` (absent qty = remove all of that line) | snapshot |
-| `set_customer` | `{first_name: str minLength 1, street_one: str optional}` | snapshot |
-| `read_back` | `{}` | snapshot + `read_back_text` (preformatted lines the agent reads out) |
-| `confirm_order` | `{revision: int}` | snapshot (state CONFIRMED) |
-| `submit_order` | `{}` | `{order_id, status, eta_seconds, eta_minutes}` + snapshot |
-| `check_street` | `{street: str}` | `{street, deliverable}` + caveat text that this is a plausibility hint only |
+| `set_customer` | `{first_name: str minLength 1, street_one: str optional}` | customer as stored + snapshot |
+| `read_back` | `{}` | snapshot (basket, customer, revision) — the material the agent reads out |
+| `confirm_order` | `{revision: int}` | snapshot (state CONFIRMED), or error if stale |
+| `submit_order` | `{}` | `{order_id, status, eta_seconds}` — the minutes conversion is the model's job, instructed by the prompt |
+| `check_street` | `{street: str}` | `{street, deliverable}` — the never-claim-verified rule lives in the prompt, not the tool |
 
 Snapshot shape (every success): `{state, revision, items: [{type, code, name,
 qty, extras}], customer: {first_name, street_one} | null, read_back_done:
@@ -184,9 +194,14 @@ pizza still gets a useful suggestion).
 ## Agent loop (`core/agent.py`)
 
 - Messages: `[system] + history`. System prompt = `prompts/system.{lang}.md`
-  with `{pizzeria_name}` substituted (fetched at startup from
-  `GET /pizzerias`), where `lang` is the channel's default language
-  (CLI `--lang de|en`, web UI toggle, default `de`).
+  with `{pizzeria_name}` substituted (captured in startup step 2). `lang` is
+  the pizzeria's country language — the greeting language the spec requires.
+  The live API exposes no country field (verified), so the deployment
+  default is `de`; this is a startup constant, **not** a channel or UI
+  control. Both prompt files state the same per-turn rule: always answer in
+  the language of the customer's latest message (German or English),
+  unprompted. Language mirroring is model behaviour; the runtime never
+  detects language.
 - Per turn: POST `{LITELLM_PIZZA_URL}/chat/completions`, bearer
   `LITELLM_PIZZA_KEY`, model `LITELLM_PIZZA_MODEL_1`, `tools` = the eight
   schemas. While the response contains `tool_calls`: dispatch each through
@@ -198,10 +213,9 @@ pizza still gets a useful suggestion).
 - The loop emits events to a callback: `user`, `assistant`, `tool_call`,
   `tool_result`, `state`, `error` — the CLI prints them (verbose), the web
   channel streams them as NDJSON, and every event is also appended as one
-  JSON line to `logs/agent-<session>.jsonl` (path from `PIZZA_LOG_DIR`,
-  default `./logs`, gitignored). Log records carry no secrets: config values
-  never enter events; tool results are logged as-is (they contain no
-  secrets by construction).
+  JSON line to `logs/agent-<session>.jsonl` (fixed path, gitignored). Log
+  records carry no secrets: config values never enter events; tool results
+  are logged as-is (they contain no secrets by construction).
 
 ## Conversation policy → prompts
 
@@ -277,9 +291,9 @@ an invitation.
 ## Tickets
 
 1. **Scaffold + config.** `.env.example`, `requirements.txt`, README
-   skeleton, gitignore for `logs/`, env loader with `~/.env`/`./.env`
-   fallback and named-var `ConfigError`.
-   ☐ `.env.example` lists all 10 vars, names only ☐ missing var exits
+   skeleton, gitignore for `logs/`, env loader (process env, else `~/.env`)
+   with named-var `ConfigError`.
+   ☐ `.env.example` lists all 11 vars, names only ☐ missing var exits
    pre-turn with var + file name ☐ nothing prints values.
 2. **Order + state machine + tests.** `core/order.py`, `core/state.py`,
    `tests/test_state.py`.
