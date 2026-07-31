@@ -1,0 +1,31 @@
+{
+  "name": "submit_timeout",
+  "fake": "timeout_then_recover",
+  "turns": [
+    {"user": "A Hawaii for Nino, via Genova 1.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "hawaii", "qty": 1, "extras": []}]}},
+       {"tool": "set_customer", "args": {"first_name": "Nino", "street_one": "via Genova 1"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Nino, via Genova 1 — one Hawaii. Shall I place it?"}
+     ]},
+    {"user": "Yes please.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "I'm not sure that went through — give me a moment to check."}
+     ]},
+    {"user": "Okay, did it work?",
+     "script": [
+       {"tool": "submit_order", "args": {}},
+       {"say": "Yes — it's in. Your order number ends in 1, ready in about 5 minutes."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "set_customer", "read_back", "confirm_order", "submit_order", "submit_order"],
+    "error_codes": ["submit_unknown"],
+    "order_id": "recovered-1",
+    "items": [{"type": "pizza", "code": "hawaii", "qty": 1}]
+  }
+}

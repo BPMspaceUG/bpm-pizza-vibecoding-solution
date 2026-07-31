@@ -1,0 +1,34 @@
+{
+  "name": "unknown_item",
+  "fake": "ok",
+  "turns": [
+    {"user": "Einmal Pasta Bolognese bitte.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pasta", "code": "bolognese", "qty": 1, "extras": []}]}},
+       {"say": "Bolognese habe ich leider nicht. Ich hätte Pasta Pesto, Pasta Funghi oder Pasta Tonno — was davon?"}
+     ]},
+    {"user": "Dann die Funghi.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pasta", "code": "funghi", "qty": 1, "extras": []}]}},
+       {"say": "Eine Pasta Funghi. Ihr Vorname?"}
+     ]},
+    {"user": "Luca, via Milano 2.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Luca", "street_one": "via Milano 2"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Luca, via Milano 2 — eine Pasta Funghi. Passt das?"}
+     ]},
+    {"user": "Ja.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt, in etwa 2 Minuten fertig."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "add_items", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": ["unknown_item"],
+    "items": [{"type": "pasta", "code": "funghi", "qty": 1}]
+  }
+}

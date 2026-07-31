@@ -1,0 +1,32 @@
+{
+  "name": "mind_change_after_read_back",
+  "fake": "ok",
+  "turns": [
+    {"user": "Eine Diavolo bitte, auf den Namen Sara, via Napoli 9.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "diavolo", "qty": 1, "extras": []}]}},
+       {"tool": "set_customer", "args": {"first_name": "Sara", "street_one": "via Napoli 9"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Sara, via Napoli 9 — eine Diavolo. Stimmt das?"}
+     ]},
+    {"user": "Halt, nehmen Sie noch eine Funghi dazu.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "funghi", "qty": 1, "extras": []}]}},
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Jetzt: eine Diavolo und eine Funghi. Stimmt es so?"}
+     ]},
+    {"user": "Ja, genau so.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 3}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt! Etwa 2 Minuten."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "set_customer", "read_back", "add_items", "confirm_order", "read_back", "confirm_order", "submit_order"],
+    "error_codes": ["stale_revision"],
+    "items": [{"type": "pizza", "code": "diavolo", "qty": 1}, {"type": "pizza", "code": "funghi", "qty": 1}]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "happy_path",
+  "fake": "ok",
+  "turns": [
+    {"user": "Hallo, was für Pizzen haben Sie?",
+     "script": [
+       {"tool": "get_menu", "args": {}},
+       {"say": "Wir haben zum Beispiel Margherita, Salami und Funghi. Was darf es sein?"}
+     ]},
+    {"user": "Zwei Margherita bitte.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "margherita", "qty": 2, "extras": []}]}},
+       {"say": "Gerne, zwei Margherita. Auf welchen Vornamen darf ich die Bestellung aufnehmen?"}
+     ]},
+    {"user": "Marco, via Roma 5.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Marco", "street_one": "via Roma 5"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Marco, via Roma 5 — zwei Margherita. Stimmt das so?"}
+     ]},
+    {"user": "Ja, passt.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt! Ihre Bestellnummer endet auf 431, fertig in etwa 2 Minuten."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["get_menu", "add_items", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": [],
+    "items": [{"type": "pizza", "code": "margherita", "qty": 2}]
+  }
+}

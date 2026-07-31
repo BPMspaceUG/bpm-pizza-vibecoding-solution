@@ -1,0 +1,34 @@
+{
+  "name": "correction",
+  "fake": "ok",
+  "turns": [
+    {"user": "One margherita please.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "margherita", "qty": 1, "extras": []}]}},
+       {"say": "One Margherita. May I have your first name?"}
+     ]},
+    {"user": "No wait, make that three.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "margherita", "qty": 2, "extras": []}]}},
+       {"say": "Three Margherita it is. Your first name, please?"}
+     ]},
+    {"user": "Anna. No street, I'll pick it up.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Anna"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Anna, pick-up — three Margherita. Shall I send it to the kitchen?"}
+     ]},
+    {"user": "Yes.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 3}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Done! Ready in about 2 minutes."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "add_items", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": [],
+    "items": [{"type": "pizza", "code": "margherita", "qty": 3}]
+  }
+}
