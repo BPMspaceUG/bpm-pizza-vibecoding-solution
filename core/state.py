@@ -50,6 +50,11 @@ def add_items(order: Order, items: list[Item]) -> None:
 
 
 def remove_item(order: Order, type_: str, code: str, qty: int | None) -> None:
+    """The spec fixes remove_item's parameters to (type, code, qty), so a
+    basket holding the same (type, code) with different extras needs
+    deterministic semantics: without qty every matching line goes; with qty
+    the most recently added matching line is reduced. The full snapshot in
+    the result lets the model repair anything else by remove + re-add."""
     _reject_closed(order)
     if not order.items:
         raise TransitionError("empty_basket", "Your basket is already empty.")
@@ -58,11 +63,15 @@ def remove_item(order: Order, type_: str, code: str, qty: int | None) -> None:
         raise TransitionError(
             "not_in_basket", "That item isn't in your basket."
         )
-    line = lines[0]
-    if qty is None or qty >= line.qty:
-        order.items.remove(line)
+    if qty is None:
+        for line in lines:
+            order.items.remove(line)
     else:
-        line.qty -= qty
+        line = lines[-1]
+        if qty >= line.qty:
+            order.items.remove(line)
+        else:
+            line.qty -= qty
     _recompute(order)
 
 

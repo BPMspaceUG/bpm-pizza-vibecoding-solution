@@ -236,6 +236,22 @@ def test_type_and_code_key_removal():
     assert [i.type for i in o.items] == ["pizza"]
 
 
+def test_remove_without_qty_clears_all_variants():
+    """Same (type, code), different extras: no-qty removal takes them all."""
+    o = Order()
+    state.add_items(o, [item(qty=1), item(qty=1, extras=["mushrooms"])])
+    state.remove_item(o, "pizza", "margherita", None)
+    assert o.items == []
+
+
+def test_remove_with_qty_reduces_most_recent_variant():
+    o = Order()
+    state.add_items(o, [item(qty=2), item(qty=2, extras=["mushrooms"])])
+    state.remove_item(o, "pizza", "margherita", 1)
+    assert [(i.extras, i.qty) for i in o.items] == \
+        [([], 2), (["mushrooms"], 1)]
+
+
 def test_submit_attempt_timestamp_set_once():
     o = order_in(State.CONFIRMED)
     state.begin_submit(o)

@@ -18,7 +18,7 @@ from .pizzasim import PizzaSim, optional_env, require_env
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 LOG_DIR = Path("logs")
 MAX_TOOL_ROUNDS = 8
-GATEWAY_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
+GATEWAY_TIMEOUT = httpx.Timeout(30.0, connect=10.0)  # per approved plan
 
 APOLOGY = {
     "de": "Entschuldigung, da ist gerade etwas schiefgegangen. "

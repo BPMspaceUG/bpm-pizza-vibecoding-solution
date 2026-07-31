@@ -41,7 +41,8 @@ class Speech:
         self.enabled = False
         if self.url and self.stt_model and self.tts_model and self.voice:
             try:
-                httpx.get(f"{self.url.rstrip('/')}/v1/models", timeout=3.0)
+                httpx.get(f"{self.url.rstrip('/')}/v1/models",
+                          timeout=3.0).raise_for_status()
                 self.enabled = True
             except httpx.HTTPError:
                 print("speech service not answering — text-only mode",

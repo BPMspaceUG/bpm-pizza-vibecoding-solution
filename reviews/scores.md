@@ -43,3 +43,19 @@ simplicity: 4
 spec_compliance: 5
 TOTAL: 24/25
 VERDICT: APPROVED
+
+## Round 4 — implementation (reviews/round4-impl.md)
+
+completeness: 4
+correctness: 3
+error_handling: 4
+simplicity: 4
+spec_compliance: 3
+TOTAL: 18/25
+VERDICT: CHANGES_REQUIRED
+
+Findings applied: remove_item now deterministic across same-(type,code)
+lines with different extras (no qty = all matching lines, qty = most recent
+line; two new tests; PLAN.md updated); speech probe requires 2xx via
+raise_for_status; gateway timeout aligned to the plan's 30s; requirements
+pinned to exact versions. Suite: 69 passed, 1 skipped.
