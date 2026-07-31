@@ -193,12 +193,25 @@ _UNSURE = ("I'm not sure that went through — let me check before I try "
            "again.")
 
 
+def _same_items(api_items: list[dict], basket) -> bool:
+    def norm(entries):
+        return sorted(
+            (e["type"], e["code"], e["qty"], tuple(sorted(e["extras"])))
+            for e in entries
+        )
+    ours = [{"type": i.type, "code": i.code, "qty": i.qty,
+             "extras": list(i.extras)} for i in basket]
+    return norm(api_items) == norm(ours)
+
+
 def _submit(order: Order, client: PizzaSim) -> dict:
     state.begin_submit(order)
 
     if order.submit_unknown:
         # A previous attempt timed out: verify against the order list
-        # before any retry — a blind retry doubles a real order.
+        # before any retry — a blind retry doubles a real order. The list
+        # carries no items, so a shortlisted candidate is verified via the
+        # detail endpoint before it is adopted.
         try:
             existing = client.list_orders()
         except PizzaSimError:
@@ -211,14 +224,19 @@ def _submit(order: Order, client: PizzaSim) -> dict:
         ]
         if matches:
             found = max(matches, key=lambda o: o.get("created_at", 0))
-            eta = max(0, int(found.get("ready_at", 0) - time.time()))
-            state.mark_submitted(order, {
-                "order_id": found["id"],
-                "status": found.get("status", "ordered"),
-                "eta_seconds": eta,
-            })
-            return {**order.result, "snapshot": order.snapshot()}
-        # verified absent → exactly one real retry, below
+            try:
+                detail = client.get_order(found["id"])
+            except PizzaSimError:
+                return _error("submit_unknown", _UNSURE)
+            if _same_items(detail.get("items", []), order.items):
+                eta = max(0, int(found.get("ready_at", 0) - time.time()))
+                state.mark_submitted(order, {
+                    "order_id": found["id"],
+                    "status": found.get("status", "ordered"),
+                    "eta_seconds": eta,
+                })
+                return {**order.result, "snapshot": order.snapshot()}
+        # verified absent (or a different order) → exactly one real retry
 
     customer = order.customer.as_dict()
     if customer.get("street_one") is None:

@@ -136,8 +136,10 @@ class FakeClient:
 
     def __init__(self):
         self.submits = 0
+        self.list_calls = 0
         self.submit_effect = lambda: fixture("order_created.json")
         self.orders = []
+        self.order_details = {}  # id -> detail payload
         self.list_effect = None  # exception to raise, if any
 
     def submit_order(self, customer, items):
@@ -145,9 +147,15 @@ class FakeClient:
         return self.submit_effect()
 
     def list_orders(self):
+        self.list_calls += 1
         if self.list_effect:
             raise self.list_effect
         return self.orders
+
+    def get_order(self, order_id):
+        if order_id not in self.order_details:
+            raise NotFoundError("no such order")
+        return self.order_details[order_id]
 
     def check_street(self, street):
         return {"street": street, "deliverable": True}
@@ -278,10 +286,65 @@ def test_submit_timeout_then_recovery_via_list(menu, fake):
                     "created_at": int(time.time()),
                     "ready_at": int(time.time()) + 300,
                     "status": "ordered"}]
+    fake.order_details["recovered-1"] = {
+        "id": "recovered-1",
+        "customer": {"first_name": "Marco"},
+        "items": [{"type": "pizza", "code": "margherita", "qty": 2,
+                   "extras": []}],
+    }
     result = tools.dispatch(order, menu, fake, "submit_order", {})
     assert result["order_id"] == "recovered-1"
     assert order.state is State.SUBMITTED
     assert fake.submits == 1  # never re-POSTed
+
+
+def test_recovery_rejects_candidate_with_different_items(menu, fake):
+    """A same-name recent order with other items is someone else's order —
+    verified via the detail endpoint, then one real retry."""
+    order = confirmed_order(menu, fake)
+    fake.submit_effect = lambda: (_ for _ in ()).throw(ApiTimeout("t"))
+    tools.dispatch(order, menu, fake, "submit_order", {})
+    fake.orders = [{"id": "other-1", "first_name": "Marco",
+                    "created_at": int(time.time()),
+                    "ready_at": int(time.time()) + 300,
+                    "status": "ordered"}]
+    fake.order_details["other-1"] = {
+        "id": "other-1", "customer": {"first_name": "Marco"},
+        "items": [{"type": "pasta", "code": "pesto", "qty": 1,
+                   "extras": []}],
+    }
+    fake.submit_effect = lambda: fixture("order_created.json")
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["order_id"] == fixture("order_created.json")["order_id"]
+    assert fake.submits == 2  # retried after verifying the mismatch
+
+
+def test_mutation_after_submit_timeout_clears_recovery_state(menu, fake):
+    """Timeout, then the customer changes the basket and reconfirms: the
+    old correlation is void — the new submit must POST fresh, not adopt
+    the old attempt's order."""
+    order = confirmed_order(menu, fake)
+    fake.submit_effect = lambda: (_ for _ in ()).throw(ApiTimeout("t"))
+    tools.dispatch(order, menu, fake, "submit_order", {})
+    assert order.submit_unknown
+
+    tools.dispatch(order, menu, fake, "add_items",
+                   {"items": [{"type": "pasta", "code": "pesto",
+                               "qty": 1}]})
+    assert not order.submit_unknown
+    assert order.submit_attempted_at is None
+    tools.dispatch(order, menu, fake, "read_back", {})
+    tools.dispatch(order, menu, fake, "confirm_order",
+                   {"revision": order.revision})
+    fake.orders = [{"id": "stale-1", "first_name": "Marco",
+                    "created_at": int(time.time()),
+                    "ready_at": int(time.time()) + 300,
+                    "status": "ordered"}]
+    fake.list_calls = 0
+    fake.submit_effect = lambda: fixture("order_created.json")
+    result = tools.dispatch(order, menu, fake, "submit_order", {})
+    assert result["order_id"] == fixture("order_created.json")["order_id"]
+    assert fake.submits == 2 and fake.list_calls == 0
 
 
 def test_submit_timeout_verified_absent_allows_one_retry(menu, fake):
@@ -358,25 +421,41 @@ def test_check_street(menu, fake):
     assert result["deliverable"] is True and "snapshot" in result
 
 
-# --- live smoke test (opt-in) ---------------------------------------------
+# --- the live acceptance test (opt-in) ------------------------------------
+# SPEC "What done looks like": full conversation, submit, then read the
+# pizzeria's orders back and assert the order is there with the right
+# customer, items and quantities — exactly, not a near match.
 
 @pytest.mark.skipif(os.environ.get("PIZZA_LIVE_TEST") != "1",
                     reason="live test only with PIZZA_LIVE_TEST=1")
-def test_live_order_smoke():
+def test_live_acceptance():
     client = PizzaSim.from_env()
     menu = Menu(client.get_menu())
     order = Order()
-    fake_free = client  # the real thing, on purpose
     for name, args in [
-        ("add_items", {"items": [{"type": "pizza", "code": "margherita",
-                                  "qty": 1}]}),
-        ("set_customer", {"first_name": "SmokeTest"}),
+        ("add_items", {"items": [
+            {"type": "pizza", "code": "margherita", "qty": 2},
+            {"type": "pasta", "code": "funghi", "qty": 1}]}),
+        ("set_customer", {"first_name": "Akzeptanz",
+                          "street_one": "via Verdi 7"}),
         ("read_back", {}),
     ]:
-        result = tools.dispatch(order, menu, fake_free, name, args)
+        result = tools.dispatch(order, menu, client, name, args)
         assert "error" not in result, result
-    result = tools.dispatch(order, menu, fake_free, "confirm_order",
+    result = tools.dispatch(order, menu, client, "confirm_order",
                             {"revision": order.revision})
-    assert "error" not in result
-    result = tools.dispatch(order, menu, fake_free, "submit_order", {})
-    assert result.get("order_id"), result
+    assert "error" not in result, result
+    result = tools.dispatch(order, menu, client, "submit_order", {})
+
+    # 1. POST returned an order id
+    order_id = result.get("order_id")
+    assert order_id, result
+
+    # 2. reading the pizzeria's orders back shows the order
+    listed = {o["id"] for o in client.list_orders()}
+    assert order_id in listed
+
+    # 3. + 4. right customer, exact items and quantities
+    detail = client.get_order(order_id)
+    assert detail["customer"]["first_name"] == "Akzeptanz"
+    assert tools._same_items(detail["items"], order.items)

@@ -74,6 +74,43 @@ the model must deal with in front of the customer.
 
 ---
 
+## What done looks like
+
+There is exactly one success condition, and everything else in this document
+exists to serve it:
+
+**A customer talks to the agent, and the resulting order appears in the API
+under the configured pizzeria — with the right customer, the right items, the
+right quantities.**
+
+Concretely, and this is the acceptance criterion:
+
+1. `POST /pizzerias/{PIZZERIA_ID}/orders` returned an order id.
+2. Reading that pizzeria's orders back shows the order, and it is visible on the
+   dashboard for that pizzeria.
+3. The customer name is the one the customer gave.
+4. The items and quantities are the ones that were read back and confirmed —
+   not a superset, not a subset, not a near match on the item code.
+
+Nothing else counts as done. A green test suite, a clean architecture, a
+pleasant interface: none of it is the product. The order on the board is the
+product.
+
+**Four failures that look like success**, each of which is a failed run and not
+a partial one:
+
+- The order landed under a **different pizzeria** than the configured one.
+- A retry after a timeout created the order **twice**.
+- A misheard or mistyped name created a **new customer** instead of matching the
+  intended one.
+- The order was submitted **without the customer confirming** the read-back.
+
+Every rule in this spec — the state machine, the revision-bound confirmation,
+the ban on blind retries, the name read-back, the tenant coming from the URL
+path — exists to prevent exactly one of those four.
+
+---
+
 ## Scope
 
 ### In
@@ -169,8 +206,9 @@ Facts that shape behaviour:
 
 All seven former open questions were resolved by probing the live API
 (`GET /menu`, `GET /pizzerias`, `POST /pizzerias/{id}/orders` — valid and
-invalid bodies —, `GET /pizzerias/{id}/orders`, `GET /location`). Facts below
-are from real responses, not documentation.
+invalid bodies —, `GET /pizzerias/{id}/orders`,
+`GET /pizzerias/{id}/orders/{order_id}`, `GET /location`). Facts below are
+from real responses, not documentation.
 
 1. **Order response field name: `order_id`.** A successful
    `POST /pizzerias/{id}/orders` returns
@@ -180,8 +218,12 @@ are from real responses, not documentation.
 2. **The list endpoint exists.** `GET /pizzerias/{id}/orders` (auth:
    `X-API-Key`) returns `{"orders": [...]}`, newest first, each with `id`,
    `customer_id`, `created_at`, `ready_at`, `status`, `delivered_at`,
-   `first_name`. It does **not** include items, so submit-timeout recovery
-   matches on `first_name` + `created_at` recency.
+   `first_name` — but **no items**. A detail endpoint
+   `GET /pizzerias/{id}/orders/{order_id}` (auth: `X-API-Key`) returns the
+   full order incl. `customer` and `items[]`, so submit-timeout recovery
+   shortlists by `first_name` + `created_at` recency and then verifies the
+   candidate's items against the basket before adopting it. The acceptance
+   test asserts items and quantities through the same detail endpoint.
 3. **Menu item shape:** `{"code", "name", "base": [ingredients], "price"}`.
    `name` is a single string (Italian proper names, identical in DE and EN) —
    there are no per-language names in the API; read-back uses `name` as-is in
@@ -394,8 +436,12 @@ matter of taste.
   that replays fixed tool calls — happy path, correction, unknown item, customer
   changes mind after read-back, submit timeout. Assert final state and the calls
   actually made.
-- **One live smoke test**, opt-in via env flag: places a real order and asserts
-  an `order_id` came back. This is the only test that touches the real API.
+- **The acceptance test is live**, and it is the only test that touches the real
+  API. Opt-in via env flag so the rest of the suite stays offline. It runs a full
+  conversation, submits, then reads the pizzeria's orders back and asserts the
+  order is present with the right customer, items and quantities — the four
+  points under *What done looks like*. If this test fails, the product does not
+  work, whatever else is green.
 - **Speech**, manual: dictate an order, a name that needs correcting, and a
   menu question — plus one run with `SPEECH_URL` unset, which must render a
   usable text-only UI and place an order normally.

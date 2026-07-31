@@ -134,6 +134,13 @@ class PizzaSim:
             "GET", f"/pizzerias/{self.pizzeria_id}/orders"
         )["orders"]
 
+    def get_order(self, order_id: str) -> dict:
+        """Full order incl. customer and items — the list endpoint carries
+        neither."""
+        return self._request(
+            "GET", f"/pizzerias/{self.pizzeria_id}/orders/{order_id}"
+        )
+
     def submit_order(self, customer: dict, items: list[dict]) -> dict:
         """The only network write. Returns order_id, status, eta_seconds."""
         return self._request(

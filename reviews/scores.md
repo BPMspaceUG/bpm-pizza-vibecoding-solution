@@ -59,3 +59,26 @@ lines with different extras (no qty = all matching lines, qty = most recent
 line; two new tests; PLAN.md updated); speech probe requires 2xx via
 raise_for_status; gateway timeout aligned to the plan's 30s; requirements
 pinned to exact versions. Suite: 69 passed, 1 skipped.
+
+## Round 5 — implementation (reviews/round5-impl.md)
+
+completeness: 4
+correctness: 3
+error_handling: 3
+simplicity: 4
+spec_compliance: 3
+TOTAL: 17/25
+VERDICT: CHANGES_REQUIRED
+
+Findings applied: mutations now clear submit_unknown/submit_attempted_at
+(recovery correlation is void once the confirmed basket changes; tested);
+web /chat serializes turns per session via a lock, concurrent request →
+409; gateway-timeout and loop-guard apologies now emitted as assistant
+events (visible in web UI and JSONL); /config reduced to the fixed
+{speech: bool} contract.
+
+Note: between rounds the operator updated SPEC.md ("What done looks like"
+acceptance criterion; live smoke test upgraded to a full acceptance test).
+Implemented: recovery now verifies candidate items via the newly probed
+order-detail endpoint before adopting; the live test is now the full
+acceptance test and passed against the real API.

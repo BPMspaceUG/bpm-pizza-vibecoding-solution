@@ -53,6 +53,7 @@ class ScriptedClient:
         self.submits += 1
         if self.mode == "timeout_then_recover" and self.submits == 1:
             self._customer = customer
+            self._items = items
             raise ApiTimeout("simulated submit timeout")
         return self.created
 
@@ -64,6 +65,11 @@ class ScriptedClient:
                      "ready_at": int(time.time()) + 300,
                      "status": "ordered"}]
         return []
+
+    def get_order(self, order_id):
+        return {"id": order_id,
+                "customer": self._customer,
+                "items": self._items}
 
     def check_street(self, street):
         return {"street": street, "deliverable": True}

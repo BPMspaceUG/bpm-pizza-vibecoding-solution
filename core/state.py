@@ -29,6 +29,11 @@ def _reject_closed(order: Order) -> None:
 def _recompute(order: Order) -> None:
     """Derived-state rule after any legal mutation (demotes CONFIRMED)."""
     order.revision += 1
+    # A mutation makes any unverified submit attempt meaningless: the
+    # recovery correlation belongs to the basket that was confirmed then,
+    # not to whatever the basket becomes now.
+    order.submit_unknown = False
+    order.submit_attempted_at = None
     if not order.items:
         order.state = State.EMPTY
     elif order.customer is None:

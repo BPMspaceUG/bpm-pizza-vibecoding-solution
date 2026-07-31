@@ -147,8 +147,6 @@ async function speak(text) {
 (async () => {
   try {
     const cfg = await (await fetch("/config")).json();
-    document.getElementById("title").textContent = cfg.pizzeria;
-    document.title = cfg.pizzeria;
     speechEnabled = cfg.speech;
     if (speechEnabled) {           // unset SPEECH_URL → not rendered at all
       mic.hidden = false;

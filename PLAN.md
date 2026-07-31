@@ -168,13 +168,17 @@ a unit test (invariants 1–5).
 Submit-timeout path: `submit_order` sets `submit_attempted_at = now()`
 before its first POST. On httpx timeout or 5xx, the order stays `CONFIRMED`
 with `submit_unknown = True`. The next `submit_order` call sees
-`submit_unknown` and first calls `list_orders()`, looking for an order with
+`submit_unknown` and first calls `list_orders()`, shortlisting orders with
 our customer's `first_name` and `created_at >= submit_attempted_at - 60`
-(60s clock-skew allowance). Found → adopt its `id` as order_id, state
-`SUBMITTED`, message says the order went through. Not found → exactly one
-real retry. List endpoint itself fails → error `submit_unknown` with an
-honest message ("I'm not sure that went through — let me check" phrasing);
-never a blind re-POST.
+(60s clock-skew allowance); the best candidate is then **verified via the
+detail endpoint** (`GET /pizzerias/{id}/orders/{order_id}`, which carries
+items) — adopted only if its items equal the basket exactly. Verified →
+state `SUBMITTED` with the recovered id. Absent or different items →
+exactly one real retry. List or detail call fails → error `submit_unknown`
+with an honest message ("I'm not sure that went through — let me check"
+phrasing); never a blind re-POST. Any basket/customer mutation clears
+`submit_unknown` and `submit_attempted_at`: the correlation belongs to the
+basket that was confirmed then, and a demoted order must POST fresh.
 
 ## Tool schemas
 
@@ -259,6 +263,8 @@ an invitation.
   mirroring is model behaviour.
 - `POST /chat` body `{session_id, text}` → `application/x-ndjson` stream of
   the agent-loop events, ending with `{"type": "done", "state": ...}`.
+  Turns are serialized per session (one `Order` per conversation = one turn
+  at a time); a second request while one is in flight gets `409`.
 - `POST /speech/stt`: multipart audio forwarded to
   `{SPEECH_URL}/v1/audio/transcriptions` with `SPEECH_STT_MODEL` and
   `PIZZERIA_LANG` as the language hint (an STT hint only — it never
@@ -305,8 +311,12 @@ an invitation.
   read-back, submit timeout) as JSON: each step = user text, scripted model
   tool calls (a stub model replays them), expected tool result codes,
   expected final state and exact call sequence. No network, no LLM.
-- Live smoke (`PIZZA_LIVE_TEST=1` opt-in, in `test_tools.py`): one real
-  order via the real API, asserts `order_id` present.
+- Live acceptance test (`PIZZA_LIVE_TEST=1` opt-in, in `test_tools.py`),
+  per SPEC "What done looks like": full conversation at the tool layer,
+  submit, then read the pizzeria's orders back and assert the order is
+  listed with the right customer and **exactly** the read-back items and
+  quantities (via the order-detail endpoint). The only test touching the
+  real API.
 - Speech: manual checklist in README (dictation, name correction, menu
   question, `SPEECH_URL` unset run).
 

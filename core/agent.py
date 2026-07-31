@@ -146,6 +146,7 @@ class Agent:
                 apology = APOLOGY[self.config.lang]
                 session.messages.append({"role": "assistant",
                                          "content": apology})
+                event({"type": "assistant", "text": apology})
                 return apology
 
             tool_calls = message.get("tool_calls")
@@ -184,6 +185,7 @@ class Agent:
         event({"type": "error", "error": "tool loop guard exceeded"})
         apology = APOLOGY[self.config.lang]
         session.messages.append({"role": "assistant", "content": apology})
+        event({"type": "assistant", "text": apology})
         return apology
 
 

@@ -66,6 +66,7 @@ def boot() -> None:
     app.state.pizzeria_name = pizzeria_name
     app.state.agent = Agent(config, client)
     app.state.sessions = {}
+    app.state.locks = {}  # one Lock per session: turns are serialized
     app.state.speech = Speech()
 
 
@@ -76,8 +77,7 @@ def index():
 
 @app.get("/config")
 def ui_config():
-    return {"speech": app.state.speech.enabled,
-            "pizzeria": app.state.pizzeria_name}
+    return {"speech": app.state.speech.enabled}  # fixed contract, per plan
 
 
 def _get_session(session_id: str) -> Session:
@@ -102,6 +102,12 @@ async def chat(body: dict):
     if text is not None and not str(text).strip():
         raise HTTPException(422, "text must not be empty")
     session = _get_session(session_id)
+    lock = app.state.locks.setdefault(session_id, threading.Lock())
+    if not lock.acquire(blocking=False):
+        # One Order per conversation means one turn at a time: overlapping
+        # requests would interleave mutations and break the revision-bound
+        # confirmation guarantees.
+        raise HTTPException(409, "a turn is already in progress")
 
     events: queue.Queue = queue.Queue()
 
@@ -112,6 +118,7 @@ async def chat(body: dict):
             events.put({"type": "done",
                         "state": session.order.snapshot()})
             events.put(None)
+            lock.release()
 
     threading.Thread(target=run, daemon=True).start()
 
