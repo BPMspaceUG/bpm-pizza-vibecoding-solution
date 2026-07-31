@@ -271,11 +271,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         </div>
         <div class="header-center">
             <select class="pizzeria-select" id="pizzeriaSelect">
-                <option value="/">🍕 PizzaSim</option>
-                <option value="/leonardo">🍕 Pizzeria Leonardo</option>
-                <option value="/giovanni">🍕 Pizzeria Giovanni</option>
-                <option value="/marco">🍕 Pizzeria Marco</option>
-                <option value="/antonio">🍕 Pizzeria Antonio</option>
+                {{pizzeria_options}}
             </select>
         </div>
         <div class="header-right">
@@ -480,6 +476,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 '''
 
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 app = FastAPI()
 
@@ -497,21 +494,67 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
-PIZZERIAS = {
-    '/': ('PizzaSim', '86517183-e1a5-4bd7-b915-e0db8f8b2131'),
-    '/leonardo': ('Pizzeria Leonardo', 'leonardo-uuid-123'),
-    '/giovanni': ('Pizzeria Giovanni', 'giovanni-uuid-456'),
-    '/marco': ('Pizzeria Marco', 'marco-uuid-789'),
-    '/antonio': ('Pizzeria Antonio', 'antonio-uuid-abc')
-}
+# Environment configuration
+PIZZASIM_URL = os.environ.get("PIZZASIM_URL", "https://www.aipizzasim.com")
+PIZZASIM_API_KEY = os.environ.get("PIZZASIM_API_KEY", "")
+
+# Pizzeria cache - loaded from API at startup
+PIZZERIAS = {}
+
+def load_pizzerias_from_api():
+    """Load available pizzerias from PizzaSim API."""
+    import requests
+    global PIZZERIAS
+
+    try:
+        headers = {}
+        if PIZZASIM_API_KEY:
+            headers["Authorization"] = f"Bearer {PIZZASIM_API_KEY}"
+
+        response = requests.get(f"{PIZZASIM_URL}/api/restaurants", headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        # Parse API response - expected format: [{"id": "uuid", "name": "Pizzeria Name", "slug": "name"}]
+        PIZZERIAS = {}
+        for restaurant in data:
+            slug = restaurant.get("slug", restaurant.get("id", "unknown"))
+            path = f"/{slug}" if slug else "/"
+            PIZZERIAS[path] = (restaurant.get("name", "PizzaSim"), restaurant.get("id"))
+
+        if not PIZZERIAS:
+            # Fallback: at least provide root
+            PIZZERIAS["/"] = ("PizzaSim", "86517183-e1a5-4bd7-b915-e0db8f8b2131")
+
+    except Exception as e:
+        # Fallback on API error
+        PIZZERIAS = {
+            '/': ('PizzaSim', '86517183-e1a5-4bd7-b915-e0db8f8b2131')
+        }
+        print(f"Warning: Could not load pizzerias from API: {e}")
+
+    return PIZZERIAS
 
 def render_html(pizzeria_path='/', lang='de-DE'):
-    pizzeria_data = PIZZERIAS.get(pizzeria_path, ('PizzaSim', '86517183-e1a5-4bd7-b915-e0db8f8b2131'))
+    # Reload pizzerias if empty (for development)
+    if not PIZZERIAS:
+        load_pizzerias_from_api()
+
+    pizzeria_data = PIZZERIAS.get(pizzeria_path, list(PIZZERIAS.values())[0] if PIZZERIAS else ('PizzaSim', ''))
     name = pizzeria_data[0]
     pizzeria_id = pizzeria_data[1]
+
+    # Generate pizzeria dropdown options
+    options = []
+    for path, (pname, _) in PIZZERIAS.items():
+        value = path if path != '/' else '/'
+        selected = ' selected' if path == pizzeria_path else ''
+        options.append(f'<option value="{value}"{selected}>🍕 {pname}</option>')
+    pizzeria_options = '\n'.join(options) if options else '<option value="/">🍕 PizzaSim</option>'
+
     welcome = f'Willkommen bei {name}! Ich kann dir helfen, das Menü zu erkunden. Was möchtest du wissen?' if lang == 'de-DE' else f'Welcome to {name}! I can help you explore the menu. What would you like to know?'
     placeholder = 'Nachricht schreiben...' if lang == 'de-DE' else 'Type a message...'
-    html = HTML_TEMPLATE.replace('{{pizzeria_name}}', name).replace('{{pizzeria_id}}', pizzeria_id).replace('{{pizzeria_path}}', pizzeria_path).replace('{{lang}}', lang).replace('{{welcome_message}}', welcome).replace('{{placeholder}}', placeholder)
+    html = HTML_TEMPLATE.replace('{{pizzeria_name}}', name).replace('{{pizzeria_id}}', pizzeria_id).replace('{{pizzeria_path}}', pizzeria_path).replace('{{lang}}', lang).replace('{{welcome_message}}', welcome).replace('{{placeholder}}', placeholder).replace('{{pizzeria_options}}', pizzeria_options)
     return HTMLResponse(content=html)
 
 def get_pid_from_path(path):
@@ -659,10 +702,14 @@ def get_free_port(preferred=8888):
             s2.close()
             return port
 
+@app.on_event("startup")
+async def startup_event():
+    """Load pizzerias from API on startup."""
+    load_pizzerias_from_api()
+
 if __name__ == "__main__":
     import uvicorn
-    PORT = 8888
-    print(f"🍕 PizzaSim: http://127.0.0.1:{PORT}")
-    print(f"   Leonardo: http://127.0.0.1:{PORT}/leonardo")
-    print(f"   Giovanni: http://127.0.0.1:{PORT}/giovanni")
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
+    # Load pizzerias before starting server
+    load_pizzerias_from_api()
+    PORT = int(os.environ.get("PORT", 8888))
+    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
