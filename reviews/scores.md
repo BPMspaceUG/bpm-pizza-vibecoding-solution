@@ -33,3 +33,13 @@ decisions/qa.md); submit_attempted_at added as recovery correlation key
 (with 60s skew allowance); lang removed from web /chat and /config, STT
 hint = PIZZERIA_LANG only; per-session immutable menu snapshot defined via
 a Session model.
+
+## Round 3 — PLAN.md (reviews/round3-plan.md)
+
+completeness: 5
+correctness: 5
+error_handling: 5
+simplicity: 4
+spec_compliance: 5
+TOTAL: 24/25
+VERDICT: APPROVED
