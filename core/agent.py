@@ -192,15 +192,15 @@ class Agent:
         if user_text is not None:
             session.messages.append({"role": "user", "content": user_text})
             event({"type": "user", "text": user_text})
-            if spoken:
-                # Activates the spoken-style policy already in the prompt.
-                session.messages.append(
-                    {"role": "system",
-                     "content": SPOKEN_NOTE[session.lang]})
+        # Ephemeral per-turn note: activates the spoken-style policy that
+        # lives in the prompt. Never persisted — a later typed turn must
+        # not inherit the spoken constraints.
+        extra = ([{"role": "system", "content": SPOKEN_NOTE[session.lang]}]
+                 if spoken else [])
 
         for _ in range(MAX_TOOL_ROUNDS):
             try:
-                message = self._chat_fn(session.messages,
+                message = self._chat_fn(session.messages + extra,
                                         tools.openai_tools())
             except GatewayError as exc:
                 event({"type": "error", "error": str(exc)})

@@ -32,6 +32,8 @@ const I18N = {
     ttsFail: "Vorlesen gerade nicht möglich.",
     micDenied: "Kein Mikrofonzugriff.",
     sessionGone: "Diese Pizzeria ist gerade nicht verfügbar.",
+    sessionLost: "Die Sitzung ist verloren gegangen — neue Sitzung " +
+      "gestartet.",
   },
   en: {
     working: "The agent is working …",
@@ -57,6 +59,7 @@ const I18N = {
     ttsFail: "Read-aloud is unavailable right now.",
     micDenied: "No microphone access.",
     sessionGone: "That pizzeria isn't available right now.",
+    sessionLost: "The session was lost — a new one was started.",
   },
 };
 
@@ -224,8 +227,14 @@ async function readStream(response, resendText) {
   return finalText;
 }
 
+const STREAM_TIMEOUT_MS = 120000;
+
 async function streamPost(path, body, resendText) {
   currentAbort = new AbortController();
+  // Real client-side timeout: covers the request AND the streamed body,
+  // so the timeout notice + resend control can actually occur.
+  const signal = AbortSignal.any(
+    [currentAbort.signal, AbortSignal.timeout(STREAM_TIMEOUT_MS)]);
   const working = document.createElement("div");
   working.className = "working";
   working.textContent = t("working");
@@ -237,9 +246,17 @@ async function streamPost(path, body, resendText) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: currentAbort.signal,
+      signal,
     });
-    if (res.status === 404) { await startSession(session.pizzeriaId); return ""; }
+    if (res.status === 404) {
+      // The server no longer knows this session: recreate transparently,
+      // keep the customer's message recoverable via resend.
+      working.remove();
+      await startSession(session.pizzeriaId);
+      notice(t("sessionLost"), resendText);
+      $("send").disabled = false;
+      return "";
+    }
     if (res.status === 409) { working.remove(); notice(t("busy")); return ""; }
     if (!res.ok) throw new Error("http");
     working.remove();
@@ -302,11 +319,8 @@ async function refreshConfig() {
 }
 
 async function startSession(pizzeriaId) {
-  if (currentAbort) currentAbort.abort();
-  chat.textContent = "";
-  lastOrderId = null;
-  renderBasket({ items: [], basket_total: 0, state: "EMPTY",
-                 customer: null });
+  // Create the new session FIRST: a failed switch must not hide the
+  // still-live conversation and basket the customer can see.
   const res = await fetch("/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -315,8 +329,14 @@ async function startSession(pizzeriaId) {
   if (!res.ok) {
     notice(t("sessionGone"));
     await refreshConfig();  // fresh selector from the live list
+    if (session) $("pizzeria-select").value = session.pizzeriaId;
     return;
   }
+  if (currentAbort) currentAbort.abort();
+  chat.textContent = "";
+  lastOrderId = null;
+  renderBasket({ items: [], basket_total: 0, state: "EMPTY",
+                 customer: null });
   const data = await res.json();
   session = { id: data.session_id, pizzeriaId: data.pizzeria_id,
               pizzeriaName: data.pizzeria_name };

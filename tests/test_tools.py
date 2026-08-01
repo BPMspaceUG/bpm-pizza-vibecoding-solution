@@ -538,18 +538,26 @@ def test_apology_follows_session_language():
     assert "sorry" in text.lower()
 
 
-def test_spoken_flag_appends_style_note():
+def test_spoken_note_is_ephemeral_per_turn():
+    """The spoken-style note reaches the model for the spoken turn only —
+    it is never persisted, and a later typed turn does not inherit it."""
+    seen = []
+
     def say(messages, tool_schemas):
+        seen.append([m["content"] for m in messages
+                     if m["role"] == "system"])
         return {"content": "ok"}
     session = create_session(config_stub(), FakeBase())
     agent = Agent(config_stub(), chat_fn=say)
     agent.run_turn(session, "hallo", spoken=True)
-    assert any(m["role"] == "system" and "vorgelesen" in m["content"]
-               for m in session.messages[1:])
-    before = len(session.messages)
+    assert any("Diese Antwort wird vorgelesen" in c
+               for c in seen[-1])  # note seen this turn
     agent.run_turn(session, "hallo")
+    assert not any("Diese Antwort wird vorgelesen" in c
+                   for c in seen[-1])  # gone next turn
     assert not any(m["role"] == "system"
-                   for m in session.messages[before:])
+                   and "Diese Antwort wird vorgelesen" in m["content"]
+                   for m in session.messages)  # never persisted
 
 
 def confirm_ready_session(chat_fn):

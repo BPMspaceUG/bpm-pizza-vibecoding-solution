@@ -282,6 +282,9 @@ def test_e2e_pizzeria_switch_and_language(page_factory, stack):
 def test_e2e_vanished_pizzeria_refreshes_selector(page_factory, stack):
     stack["gateway"].mode = "ok"
     page = open_app(page_factory, stack)
+    page.fill("#text", "Zwei Margherita bitte")
+    page.click("#send")
+    page.wait_for_selector("#basket-lines li", timeout=30000)
     stack["pizzasim"].pizzerias = [p for p in stack["pizzasim"].pizzerias
                                    if p["id"] != PZ2]
     try:
@@ -290,8 +293,26 @@ def test_e2e_vanished_pizzeria_refreshes_selector(page_factory, stack):
         page.wait_for_function(
             "document.querySelectorAll('#pizzeria-select option')"
             ".length === 1", timeout=15000)
+        # the failed switch must NOT hide the still-live order
+        assert page.locator("#basket-lines li").count() == 1
+        assert page.locator(".msg.user").count() == 1
     finally:
         stack["pizzasim"].pizzerias.append(PZ2_ENTRY)
+    page.close()
+
+
+def test_e2e_lost_session_recreates_and_offers_resend(page_factory,
+                                                      stack):
+    """Server no longer knows the session (e.g. restart): the customer
+    sees a plain notice, gets a fresh session, and can resend."""
+    stack["gateway"].mode = "ok"
+    page = open_app(page_factory, stack)
+    stack["web"].app.state.sessions.clear()  # simulate a lost session
+    page.fill("#text", "Was kostet eine Margherita?")
+    page.click("#send")
+    page.wait_for_selector(".notice button", timeout=30000)  # resend
+    page.locator(".notice button").last.click()
+    page.wait_for_selector("text=8.5 €", timeout=30000)
     page.close()
 
 
