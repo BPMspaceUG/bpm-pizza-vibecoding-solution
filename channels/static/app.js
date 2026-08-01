@@ -156,11 +156,12 @@ async function speak(text) {
       document.getElementById("title").textContent = cfg.pizzeria;
       document.title = cfg.pizzeria;
     }
-    // Mic needs getUserMedia, which insecure contexts don't provide.
-    speechEnabled = cfg.speech && !!navigator.mediaDevices;
-    if (speechEnabled) {           // unset SPEECH_URL → not rendered at all
-      mic.hidden = false;
+    // TTS is server-proxied audio and works in any context; only the mic
+    // needs getUserMedia/MediaRecorder, which insecure contexts lack.
+    speechEnabled = cfg.speech;    // unset SPEECH_URL → nothing rendered
+    if (speechEnabled) {
       ttsWrap.hidden = false;
+      if (navigator.mediaDevices && window.MediaRecorder) mic.hidden = false;
     }
   } catch { /* text chat works regardless */ }
   turn(null); // opening turn: the agent greets first
