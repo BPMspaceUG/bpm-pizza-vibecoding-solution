@@ -127,17 +127,23 @@ Schemas and parameters unchanged (fixed by SPEC). Result changes only:
   visually distinct read-back panel with a **Bestellen/Confirm** button
   bound to the streamed `revision`.
 - Click → `POST /confirm {session_id, revision}` → **one core method**
-  `Agent.confirm_and_submit(session, revision, emit)`:
-  1. `tools.dispatch("confirm_order", {revision})` — stale revision or
-     wrong state returns the typed error; it streams to the UI as a
-     notice and nothing is submitted.
-  2. On success `tools.dispatch("submit_order", {})` (full v1 semantics
-     incl. timeout recovery).
-  3. Both calls are appended to `session.messages` as a synthetic
-     assistant `tool_calls` message + `tool` results (OpenAI format), so
-     the model's context stays consistent.
-  4. One model call phrases the outcome (order id in groups, minutes);
-     it streams like a normal turn and is logged.
+  `Agent.confirm_and_submit(session, revision, emit)` with **symmetric
+  success/failure semantics** — one path, not two:
+  1. `tools.dispatch("confirm_order", {revision})`; on success also
+     `tools.dispatch("submit_order", {})` (full v1 semantics incl.
+     timeout recovery).
+  2. **Every** dispatch performed — successful or failed — is appended to
+     `session.messages` as a synthetic assistant `tool_calls` message +
+     `tool` result (OpenAI format) and emitted/logged as the usual
+     `tool_call`/`tool_result`/`state` events. The model's context and
+     the JSONL log are identical in shape to a model-initiated call.
+  3. One model call then phrases the outcome to the customer — the order
+     id in groups and minutes on success, or the refusal in plain words
+     on failure (stale revision → "the order changed, let me read it back
+     again"), exactly the SPEC's "the refusal is a tool result the model
+     must deal with in front of the customer". It streams like a normal
+     turn. The UI additionally refreshes the basket panel from the
+     streamed snapshot; nothing is submitted on a failed confirm.
 - The customer action is a click, not a word; `CONFIRMED` remains
   reachable only via `confirm_order(revision)`; the transport forwards two
   identifiers and owns zero logic.
@@ -154,7 +160,12 @@ Server (`channels/web.py`):
   then shows "list unavailable" and no selector (no fallback entry).
 - `POST /session {pizzeria_id?, lang?}` → creates a Session (defaults:
   preselected id, `PIZZERIA_LANG`), returns `{session_id, pizzeria_id,
-  pizzeria_name, lang}`. Invalid id → 409 with the session-error text.
+  pizzeria_name, lang}`. Invalid/vanished id → 409 with the session-error
+  text; the UI then **re-fetches `/config`** (which performs a fresh
+  `GET /pizzerias`), re-renders the selector from that live list — or the
+  "list unavailable" state if the fetch fails — and shows the notice.
+  Covered by a TestClient test (409 + fresh list served) and an E2E
+  scenario (stub drops a pizzeria between load and selection).
 - `POST /chat {session_id, text|null}` → NDJSON stream (unchanged
   protocol; `text: null` = greeting turn). 404 for unknown session (the
   UI then creates a fresh one). Per-session lock → 409 on overlap.
@@ -168,6 +179,24 @@ Server (`channels/web.py`):
 - Speech proxy endpoints move to `channels/speech.py` (deliverable):
   `SpeechService` class (config, probe, stt(audio, lang), tts(text,
   lang)); web.py keeps only the thin route handlers.
+
+**Speech behaviour (full SPEC coverage, not just the STT hint):**
+
+- STT **and** TTS requests carry `session.lang` as the language; no
+  separate speech-language config (SPEC's language-authority rule).
+- Synthesis is **off by default**, toggled by the customer, applied only
+  to the **final** assistant message of a turn — never to intermediate
+  steps (v1 behaviour, kept and E2E-visible: the toggle exists only when
+  speech is enabled).
+- Spoken-answer policy: `POST /chat` gains optional `spoken: true`, set by
+  the UI when the input came from the microphone or the TTS toggle is on.
+  Core appends a one-line per-turn note instructing spoken style (≤3 menu
+  items + invitation, minutes not seconds, order id in groups) — the
+  policy itself lives in the system prompt; the flag only activates it.
+  Unit test: flag → note present; no flag → absent.
+- Push-to-talk with visible recording state; a failed STT/TTS call shows a
+  notice and never touches the order (v1, kept). Manual checklist in
+  README as SPEC requires.
 
 UI (`channels/static/` — rebuilt):
 
@@ -196,7 +225,15 @@ UI (`channels/static/` — rebuilt):
   - fetch error / abort / non-2xx → rendered notice naming which
     (error, timeout, connection lost) + a resend button that re-posts the
     same text;
-  - all notices in the session language, plain words.
+  - all notices in plain words, in the **customer's language**, defined
+    as follows.
+- **Notice-language rule (explicit decision):** UI-generated text (chrome,
+  notices, resend prompts) follows `session.lang` — the language the
+  customer chose via the header switch, or the default before any choice.
+  The UI performs **no language detection** (a heuristic would be a
+  parser-shaped guess, and model replies already mirror per turn); the
+  switch is the customer's declaration of their language toward the UI.
+  Tested: switch to EN → subsequent notices render in English (E2E).
 
 ## CLI v2
 
@@ -213,7 +250,19 @@ total from the snapshot (printing what core computed, no arithmetic).
 | Gateway unreachable | existing retry-once → apology (now also an `assistant` event, v1 fix) + UI resend offer |
 | Speech service down | probe fails → controls not rendered; per-call failure → notice, order untouched |
 
-All other rows: unchanged v1 mechanics, already tested.
+All other rows keep v1 mechanics — but v3 makes their **rendered outcome**
+part of the web contract, so each customer-visible row gets web-surface
+coverage, not only tool-level tests:
+
+- `401/403` ("can't reach the kitchen system"), `422` submit_failed with
+  the offending field, submit `5xx`/timeout (`submit_unknown` honest
+  message), empty-basket submit ("What can I get you?"): each is asserted
+  as a **rendered assistant message in the DOM or NDJSON stream** —
+  tool-level errors reach the customer as model-phrased plain language
+  (the model receives the speakable `message`), transport-level failures
+  as UI notices. Coverage: golden transcripts (submit timeout), TestClient
+  stream assertions (401/422/empty basket via stub PizzaSim), E2E
+  (tool error + gateway down + cut stream).
 
 ## Testing
 
@@ -233,7 +282,10 @@ All other rows: unchanged v1 mechanics, already tested.
      add items → name → read-back panel → **confirm click** → submitted
      lock + order id visible; basket totals correct at each step;
   2. pizzeria switch: selector → fresh conversation, header + footer UUID
-     change, basket cleared;
+     change, basket cleared; language switch to EN → subsequent UI
+     notices render in English;
+  2b. vanished pizzeria: stub drops a pizzeria between page load and
+     selection → 409 → notice + selector re-rendered from the fresh list;
   3. failure — tool error: unknown item → candidates visible in steps,
      answer rendered;
   4. failure — gateway unreachable: stub gateway refuses → apology text
