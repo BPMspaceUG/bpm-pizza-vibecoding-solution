@@ -12,3 +12,28 @@ A default would smuggle in a hardcoded fallback, conflicting with "nothing
 is hardcoded" and the missing-var-fails-startup rule. If missing/empty, exit
 before the first turn naming `PIZZERIA_LANG` and where it was expected; no
 default applied.
+
+## 2026-08-01 — SPEC v2: Nachbessern oder Neustart?
+
+**Q:** Operator replaced SPEC.md (v2: prices+totals, customer-selectable
+multi-pizzeria, APP_VERSION, full "The web channel" contract, mandatory
+browser E2E). Retrofit the approved v1 codebase or restart from scratch?
+
+**Process:** Codex audit of the v1 claims (PASS — review trail, artifacts,
+test count verified in-repo; reviews/round9-audit-grill.md), then a 6-question
+grill of the retrofit position and answers (reviews/round10-grill-verdict.md).
+
+**A (decision): RETROFIT**, under 5 binding conditions:
+1. `PIZZERIA_LANG` must be documented in SPEC.md's env table — no hidden
+   required var.
+2. Core-owned session factory; immutable per-session
+   {pizzeria_id, pizzeria_name, client, menu, lang, order, messages};
+   no app-wide tenant-bound client/agent.
+3. Confirm path exactly: UI control → POST /confirm {session_id, revision}
+   → one core method dispatching confirm_order(revision) then submit_order,
+   synthetic tool messages appended, stale revisions rejected.
+4. Web channel treated as substantial rewrite (done-event, unanswered/
+   resend paths, header/footer contract, basket+total, connection states,
+   start over, switch-race abandonment via fresh session ids).
+5. Prices/totals canonical in core only, copied at add time, unit-tested +
+   Playwright E2E incl. tenant switch and the three failure paths.
