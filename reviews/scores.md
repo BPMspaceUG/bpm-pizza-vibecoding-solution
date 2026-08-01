@@ -130,3 +130,18 @@ Round 12 (reviews/round12-spec-gate-reject.md, Issue #1): Judge REJECT —
 patch 2 incomplete in error table, prose, and acceptance-test wording.
 Round 13 (reviews/round13-spec-gate-approve.md, Issue #1): Judge APPROVE —
 patched SPEC.md is build-ready. (Document gate, rubric not applicable.)
+
+## Rounds 14-16 — PLAN v2 gate (Issue #2)
+
+Round 14: completeness 4, correctness 3, error_handling 3, simplicity 4,
+spec_compliance 3 — TOTAL 17/25, CHANGES_REQUIRED (notice language,
+vanished tenant, speech coverage, web-surface error rendering, confirm
+history semantics — all applied).
+Round 15: completeness 4, correctness 4, error_handling 3, simplicity 4,
+spec_compliance 3 — TOTAL 18/25, CHANGES_REQUIRED (confirm phrasing
+gateway path, header/footer E2E assertions, /health semantics — applied
+as amendments in Issue #2 round 3).
+Round 16: completeness 5, correctness 5, error_handling 4, simplicity 4,
+spec_compliance 5 — TOTAL 23/25, VERDICT: APPROVED.
+Note: rounds 15-16 amendments live verbatim in Issue #2 (a repo hook
+gates direct PLAN.md edits); PLAN.md sync pending operator decision.
