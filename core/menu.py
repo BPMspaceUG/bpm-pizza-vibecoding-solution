@@ -19,16 +19,26 @@ class Menu:
             "pizza": {p["code"]: p["name"] for p in payload["pizzas"]},
             "pasta": {p["code"]: p["name"] for p in payload["pasta"]},
         }
+        self._prices: dict[tuple[str, str], float] = {
+            (t, p["code"]): p.get("price", 0.0)
+            for t, key in (("pizza", "pizzas"), ("pasta", "pasta"))
+            for p in payload[key]
+        }
         self.toppings: list[str] = list(payload.get("toppings", []))
 
     def as_tool_result(self) -> dict:
         return {
-            "pizzas": [{"code": c, "name": n}
+            "pizzas": [{"code": c, "name": n,
+                        "price": self._prices[("pizza", c)]}
                        for c, n in self._by_type["pizza"].items()],
-            "pasta": [{"code": c, "name": n}
+            "pasta": [{"code": c, "name": n,
+                       "price": self._prices[("pasta", c)]}
                       for c, n in self._by_type["pasta"].items()],
             "toppings": self.toppings,
         }
+
+    def price(self, type_: str, code: str) -> float:
+        return self._prices[(type_, code)]
 
     def display_name(self, type_: str, code: str) -> str:
         """Validate (type, code); return display name or raise unknown_item

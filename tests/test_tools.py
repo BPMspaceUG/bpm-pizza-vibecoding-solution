@@ -129,6 +129,41 @@ def test_submit_parses_order_created():
     assert isinstance(result["eta_seconds"], int)
 
 
+# --- prices and totals (canonical in core) --------------------------------
+
+def test_menu_carries_prices(menu):
+    result = menu.as_tool_result()
+    margherita = next(p for p in result["pizzas"]
+                      if p["code"] == "margherita")
+    assert margherita["price"] == 8.5
+    assert menu.price("pasta", "pesto") == 8.5
+
+
+def test_unit_price_copied_at_add_time_and_totals_computed(menu):
+    fake = FakeClient()
+    order = Order()
+    tools.dispatch(order, menu, fake, "add_items",
+                   {"items": [{"type": "pizza", "code": "margherita",
+                               "qty": 3},
+                              {"type": "pizza", "code": "funghi",
+                               "qty": 1}]})
+    snap = order.snapshot()
+    line = snap["items"][0]
+    assert line["unit_price"] == 8.5
+    assert line["line_total"] == 25.5
+    assert snap["basket_total"] == 34.5  # 3*8.5 + 9.0
+
+
+def test_totals_use_cent_rounding_not_float_accumulation():
+    from core.order import Item
+    order = Order()
+    # 0.1 * 3 is the classic float trap: 0.30000000000000004
+    order.items.append(Item("pizza", "x", "X", 3, [], unit_price=0.1))
+    snap = order.snapshot()
+    assert snap["items"][0]["line_total"] == 0.3
+    assert snap["basket_total"] == 0.3
+
+
 # --- dispatch -------------------------------------------------------------
 
 class FakeClient:

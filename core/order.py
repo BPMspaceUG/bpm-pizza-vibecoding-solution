@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
+
+
+def _cents(value: Decimal) -> float:
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 class State(str, Enum):
@@ -20,9 +25,15 @@ class Item:
     name: str
     qty: int
     extras: list[str] = field(default_factory=list)
+    # Copied from the session menu snapshot at add time; totals are
+    # computed here in core only — the model never does arithmetic.
+    unit_price: float = 0.0
 
     def line_key(self) -> tuple:
         return (self.type, self.code, tuple(sorted(self.extras)))
+
+    def line_total(self) -> float:
+        return _cents(Decimal(str(self.unit_price)) * self.qty)
 
 
 @dataclass
@@ -57,9 +68,15 @@ class Order:
                     "name": i.name,
                     "qty": i.qty,
                     "extras": list(i.extras),
+                    "unit_price": i.unit_price,
+                    "line_total": i.line_total(),
                 }
                 for i in self.items
             ],
+            "basket_total": _cents(
+                sum((Decimal(str(i.unit_price)) * i.qty
+                     for i in self.items), Decimal("0"))
+            ),
             "customer": self.customer.as_dict() if self.customer else None,
             "read_back_done": self.read_back_revision == self.revision,
         }

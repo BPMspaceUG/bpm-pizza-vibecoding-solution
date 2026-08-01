@@ -144,6 +144,8 @@ def _dispatch(order: Order, menu: Menu, client: PizzaSim,
                                        raw.get("code", "")),
                 qty=_int_qty(raw.get("qty")),
                 extras=extras,
+                unit_price=menu.price(raw.get("type", ""),
+                                      raw.get("code", "")),
             ))  # any failure above rejects the whole call — atomic
         if not items:
             return _error("invalid_quantity", "What can I get you?")
