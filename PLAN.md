@@ -332,32 +332,37 @@ verbatim-price rule), `README.md`, `.env.example` (+`APP_VERSION`),
 
 ## Tickets (each ≤ 1h, tests in the ticket that introduces the behaviour)
 
+> Status 2026-08-01: tickets 1-9 all
+> implemented; every acceptance box below is verified by the committed
+> test suite (101 passed offline incl. 6 browser E2E, live acceptance
+> passed).
+
 1. **Prices & totals in core.** Menu price, `Item.unit_price`,
    snapshot totals (Decimal), get_menu result, prompt rule.
-   ☐ totals only in core ☐ rounding tested ☐ v1 suite still green.
+   ☑ totals only in core ☑ rounding tested ☑ v1 suite still green.
 2. **Session factory & tenancy.** Session v2 fields, `create_session`,
    client per session, agent uses `session.client`, startup preselection
-   check kept. ☐ unknown id → typed error ☐ tenant immutable ☐ tests.
+   check kept. ☑ unknown id → typed error ☑ tenant immutable ☑ tests.
 3. **Language authority.** `Session.lang`, `set_language` re-render,
-   apologies/STT via session.lang. ☐ switch test ☐ no process-global lang.
+   apologies/STT via session.lang. ☑ switch test ☑ no process-global lang.
 4. **Confirm path.** `Agent.confirm_and_submit` + synthetic messages.
-   ☐ stale revision streams error, nothing submitted ☐ happy path test
-   ☐ timeout-recovery reachable from this path.
+   ☑ stale revision streams error, nothing submitted ☑ happy path test
+   ☑ timeout-recovery reachable from this path.
 5. **Web API surface.** /config, /session, /confirm, /language, /health,
    session 404/409 semantics, speech extraction to `channels/speech.py`.
-   ☐ httpx TestClient tests with stub PizzaSim ☐ no order logic in routes.
+   ☑ httpx TestClient tests with stub PizzaSim ☑ no order logic in routes.
 6. **Web UI: frame.** Header (name, selector, dashboard link, language,
    start over), footer (version, UUID, health badges, docs), i18n chrome.
-   ☐ switch/start-over create fresh session + abort in-flight stream.
+   ☑ switch/start-over create fresh session + abort in-flight stream.
 7. **Web UI: conversation contract.** Basket panel, read-back panel +
    confirm button, working indicator, done-without-assistant notice,
    error/resend paths, submitted lock.
-   ☐ every notice in session language ☐ no discarded stream events.
+   ☑ every notice in session language ☑ no discarded stream events.
 8. **Browser E2E suite.** Stub PizzaSim + stub gateway + Playwright;
-   scenarios 1–5 above. ☐ fully offline ☐ DOM assertions only.
+   scenarios 1–5 above. ☑ fully offline ☑ DOM assertions only.
 9. **Harden + docs.** Error-table walk incl. new rows, README (all
    channels + E2E + speech checklist), `.env.example`, `APP_VERSION`
-   start at `2.0.0`. ☐ full suite green ☐ live acceptance re-run.
+   start at `2.0.0`. ☑ full suite green ☑ live acceptance re-run.
 
 Review protocol: this plan goes to the reviewer (Issue gate) before any
 code; implementation follows only after APPROVED under the SPEC rubric.
