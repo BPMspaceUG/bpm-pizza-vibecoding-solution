@@ -52,3 +52,25 @@ be echoed). read_back does not recite reused streets. Reuse limited to
 street_one until street_two on POST /orders is verified. SPEC.md updated
 in 8 places per the Codex decision list; previous spec archived as
 SPEC_20260801_3.md. No plan, no implementation yet (operator hold).
+
+## 2026-08-01 — Spec Future: voice becomes first-class (SPEC change only)
+
+**Q:** Operator: "a voice agent without voice is a bit stupid" — make voice
+a DONE-relevant capability. Discussed with Codex
+(reviews/round21-voice-spec-discussion.md).
+
+**A (decision, 10 points applied):** Acceptance point 5 (spoken
+conversation produces the same verified order); speech = required release
+capability, text-only = degraded operation (release completeness vs.
+runtime resilience separated — a speech outage never blocks typed
+ordering); SPEECH_* required in production, optional in dev/test; secure
+browser context (HTTPS/domain) mandatory for the voice path — plain HTTP
+is not a valid acceptance environment; MediaRecorder-format in,
+browser-playable audio out; latency = turn-taking fitness, sustained
+multi-second delays are a defect; new "Speech service provisioning"
+subsection (co-deployed, neutral definition under deploy/); testing:
+offline speech E2E via stub service (wiring only), opt-in live voice
+acceptance test with DE+EN audio fixtures as the release-gating proof
+(manual demo is a release-note aid only), name-confirmation regression
+against ghost customers; deliverables + locked-decision row added;
+telephony stays deferred. No plan, no implementation (operator hold).

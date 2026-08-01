@@ -48,6 +48,9 @@ Concretely, and this is the acceptance criterion:
 3. The customer name is the one the customer gave.
 4. The items and quantities are the ones that were read back and confirmed —
    not a superset, not a subset, not a near match on the item code.
+5. With speech configured in the target deployment, a spoken conversation
+   on the web channel can produce the same verified order outcome as
+   points 1–4.
 
 Nothing else counts as done. A green test suite, a clean architecture, a
 pleasant interface: none of it is the product. **The order on the board is the
@@ -120,8 +123,10 @@ the model must deal with in front of the customer.
   - `web` — FastAPI server on port 8888, browser chat UI, streaming the
     agent's intermediate steps as newline-delimited JSON so tool calls and
     tool results are visible, not just the final answer.
-- **Speech on the web transport**, served by a self-hosted CPU-only speech
-  container over HTTP. See *Speech*.
+- **Speech on the web transport is a required channel capability in
+  production.** It is provisioned via the self-hosted speech service
+  described in *Speech*; if the service is unavailable at runtime,
+  ordering degrades to text-only without breaking ordering.
 - **Several pizzerias.** The customer chooses which one they are ordering
   from, and can change it. `PIZZERIA_ID` is the preselection, not a
   restriction.
@@ -169,7 +174,7 @@ never write to it, never create it, never print a value.
 | `PIZZERIA_ID` | UUID of the pizzeria preselected on first load |
 | `PIZZERIA_LANG` | Initial language, `de` or `en`: the greeting, the CLI, and the web UI before the customer switches |
 | `APP_VERSION` | Release version, `x.y.z`, shown in the footer |
-| `SPEECH_URL` | Base URL of the self-hosted speech service (optional) |
+| `SPEECH_URL` | Base URL of the self-hosted speech service; required in production releases, optional only for local/dev and explicit text-only test scenarios |
 | `SPEECH_STT_MODEL` | Transcription model id |
 | `SPEECH_TTS_MODEL` | Synthesis model id |
 | `SPEECH_TTS_VOICE` | Voice id |
@@ -180,8 +185,11 @@ Rules:
   vendor — not even as a fallback "just in case".
 - Missing or empty required variable → exit before the first turn with a
   message naming the variable and the file it was expected in. Never start
-  half-configured. `SPEECH_*` are the exception: absent means the speech
-  features are not rendered, and everything else works.
+  half-configured. For production completeness, `SPEECH_URL`,
+  `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL` and `SPEECH_TTS_VOICE` are
+  required. For local/dev and explicit degraded-mode tests they may be
+  absent; in that case speech controls are not rendered and text ordering
+  remains fully usable.
 - Secrets never appear in logs, transcripts, error messages or the web UI.
 
 ---
@@ -501,15 +509,39 @@ plain HTTP with an OpenAI-compatible surface.
   never listens continuously. Recording state is visible at all times.
 - **Synthesis is optional and off by default**, toggled by the customer,
   applied only to the final assistant message.
-- **Speech is never required.** With `SPEECH_URL` unset or the service down,
-  microphone and speaker toggle are not rendered and the text UI is fully
-  usable. A speech failure is never an order failure.
+- **Speech is a required product capability for release completeness.**
+  Text-only is the degraded fallback when speech is unconfigured in
+  dev/test or temporarily unavailable at runtime: microphone and speaker
+  toggle are then not rendered and the text UI is fully usable, and a
+  speech outage must never block typed ordering. But a production release
+  without a working speech path is not done.
+- **Voice-capable web deployments run in a secure browser context:**
+  HTTPS on a real host/domain, or localhost during development. Plain
+  HTTP is not a valid acceptance environment for microphone input
+  (`getUserMedia` is unavailable there).
+- **Transport formats:** the STT path accepts the browser-recorded audio
+  format emitted by `MediaRecorder`; the TTS path returns audio playable
+  by a standard browser audio element.
+- **Latency:** each STT and each TTS request should complete quickly
+  enough for turn-based conversation on demo hardware; sustained
+  multi-second delays that make turn-taking awkward are a defect.
 - **Speech shortens answers, it does not change them.** Same core, same
   tools, same state machine. When a reply will be spoken: at most three menu
   items plus an invitation, times in minutes, order id read in groups.
 - **Confirm the name.** Transcription errors on names are the expensive
   failure: a misheard name silently creates a customer nobody will find
   again. Read the name back before submitting.
+
+### Speech service provisioning
+
+The deployment includes a self-hosted, CPU-only speech service reachable
+at `SPEECH_URL`, exposing OpenAI-compatible
+`POST /v1/audio/transcriptions` and `POST /v1/audio/speech`. The
+application and the speech service are deployed together as first-party
+artifacts. The repository includes a neutral deployment definition for
+this service next to the app deployment artifacts (no vendor or model
+names in source or spec — the operator configures them via the
+environment, exactly like the chat model).
 
 ---
 
@@ -594,9 +626,26 @@ taste.
   endpoint carries no items and cannot verify them) — and assert the four
   points under *What done looks like*. If this fails, the product does not
   work, whatever else is green.
-- **Speech**, manual: dictate an order, a name that needs correcting, a menu
-  question — plus one run with `SPEECH_URL` unset, which must render a usable
-  text-only UI and place an order normally.
+- **Offline speech E2E** with a stub speech service: exercise the real
+  browser UI path — speech-control visibility when speech is configured,
+  STT round-trip from recorded fixtures, `spoken: true` turn metadata,
+  and TTS fetched only for the final assistant message when the toggle is
+  enabled. These tests assert wiring, not transcription or synthesis
+  quality.
+- **Live voice acceptance test** (opt-in, like the live acceptance test):
+  send recorded spoken-order fixtures through the real speech service,
+  drive a full order through the web/API path, and verify the same
+  order-correctness criteria as *What done looks like* via the API. At
+  least one German and one English fixture. This is the release-gating
+  voice proof — a manual demo is a release-note aid, not the acceptance
+  artifact.
+- **Name-confirmation regression:** a transcript/fixture with a
+  plausible-but-wrong first name asserts that the agent reads back and
+  confirms the name before submission, preventing ghost-customer
+  creation.
+- **Speech, manual** (supplementary): dictate an order, a name that needs
+  correcting, a menu question — plus one run with `SPEECH_URL` unset,
+  which must render a usable text-only UI and place an order normally.
 
 ---
 
@@ -737,8 +786,11 @@ a full pass over the spec finds nothing left that you know how to improve.
 ├── prompts/
 │   ├── system.de.md
 │   └── system.en.md
+├── deploy/
+│   └── speech service definition ← neutral, self-hosted, CPU-only
 ├── tests/
 │   ├── fixtures/            ← recorded API responses
+│   ├── fixtures/audio/      ← recorded audio for offline + live voice tests
 │   ├── test_state.py
 │   ├── test_tools.py
 │   ├── test_web_e2e.py      ← headless browser, DOM assertions
@@ -764,6 +816,7 @@ a full pass over the spec finds nothing left that you know how to improve.
 | Language | Session language from `PIZZERIA_LANG`, switchable in the web header; per-turn mirroring wins for replies |
 | Transports | One core, two channels (CLI, web), no logic in the channels |
 | Speech | Self-hosted container, OpenAI-compatible HTTP; no vendor, no browser speech API |
+| Voice | Required release capability on the web channel; text-only is degraded operation, not the product |
 | Web UI | Pizzeria name, basket and connection state always visible; no message ends unanswered |
 | Version | `x.y.z` in the footer, raised every release |
 | Derived URLs | Dashboard and docs built from `PIZZASIM_URL`, never literal |
