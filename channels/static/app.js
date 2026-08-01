@@ -10,7 +10,12 @@ const mic = document.getElementById("mic");
 const ttsWrap = document.getElementById("tts-wrap");
 const ttsToggle = document.getElementById("tts-toggle");
 
-const sessionId = crypto.randomUUID();
+// crypto.randomUUID needs a secure context (HTTPS/localhost); the demo may
+// be served over plain HTTP, so fall back to getRandomValues.
+const sessionId = crypto.randomUUID
+  ? crypto.randomUUID()
+  : Array.from(crypto.getRandomValues(new Uint8Array(16)),
+               (b) => b.toString(16).padStart(2, "0")).join("");
 let speechEnabled = false;
 
 function add(cls, text) {
@@ -147,7 +152,12 @@ async function speak(text) {
 (async () => {
   try {
     const cfg = await (await fetch("/config")).json();
-    speechEnabled = cfg.speech;
+    if (cfg.pizzeria) {
+      document.getElementById("title").textContent = cfg.pizzeria;
+      document.title = cfg.pizzeria;
+    }
+    // Mic needs getUserMedia, which insecure contexts don't provide.
+    speechEnabled = cfg.speech && !!navigator.mediaDevices;
     if (speechEnabled) {           // unset SPEECH_URL → not rendered at all
       mic.hidden = false;
       ttsWrap.hidden = false;

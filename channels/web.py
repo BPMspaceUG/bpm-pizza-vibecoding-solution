@@ -77,7 +77,10 @@ def index():
 
 @app.get("/config")
 def ui_config():
-    return {"speech": app.state.speech.enabled}  # fixed contract, per plan
+    # Contract per plan: speech flag + pizzeria display name. The customer
+    # must see which pizzeria they are ordering at.
+    return {"speech": app.state.speech.enabled,
+            "pizzeria": app.state.pizzeria_name}
 
 
 def _get_session(session_id: str) -> Session:

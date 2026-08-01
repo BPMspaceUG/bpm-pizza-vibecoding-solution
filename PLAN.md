@@ -257,10 +257,12 @@ an invitation.
 
 ## Web channel protocol
 
-- `GET /` → static UI. `GET /config` → `{speech: bool}` (true only if
-  `SPEECH_URL` set and a probe succeeded at startup). No language field:
-  language is never a UI control — the greeting comes from `PIZZERIA_LANG`,
-  mirroring is model behaviour.
+- `GET /` → static UI. `GET /config` → `{speech: bool, pizzeria: str}`
+  (`speech` true only if `SPEECH_URL` set and a probe succeeded at startup;
+  `pizzeria` is the display name from startup step 2 — the customer must
+  see which pizzeria they are ordering at). No language field: language is
+  never a UI control — the greeting comes from `PIZZERIA_LANG`, mirroring
+  is model behaviour.
 - `POST /chat` body `{session_id, text}` → `application/x-ndjson` stream of
   the agent-loop events, ending with `{"type": "done", "state": ...}`.
   Turns are serialized per session (one `Order` per conversation = one turn
