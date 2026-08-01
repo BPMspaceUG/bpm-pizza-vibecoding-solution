@@ -1,365 +1,287 @@
-# PizzaSim Ordering Agent — Implementation Plan
+# PizzaSim Ordering Agent — Implementation Plan v2
 
-> Written before any code, per SPEC.md stage 1. Updated as implementation
-> proceeds. Contains design and tickets only — no code.
+> Stage-1 artifact for SPEC.md (v3, patched, gate-approved in Issue #1).
+> Retrofit of the approved v1 build per the grill verdict in
+> `decisions/qa.md` (RETROFIT, 5 binding conditions). Design only — no code.
 
-**Goal:** A two-channel (CLI + web) pizza-ordering agent where the order is a
-state machine owned by the code and the model only converts speech/text into
-tool calls.
+**Goal:** Extend the approved v1 agent to SPEC v3: customer-selectable
+pizzerias, prices and code-owned totals, the full web-channel contract
+(header/footer/basket/confirm control/answer invariant), APP_VERSION,
+per-session language, and a mandatory offline browser E2E suite.
 
-**Architecture:** One Python core (`core/`) holds the order state machine, menu
-validation, PizzaSim client, tool dispatch and the model loop. Channels
-(`channels/cli.py`, `channels/web.py`) are transports only: words in, words
-out, zero order logic. Speech is an optional proxy on the web channel to a
-self-hosted OpenAI-compatible speech service.
+**Architecture:** unchanged core idea — the order is a state machine owned
+by code, the model only speaks. What moves: everything tenant-, language-
+and menu-scoped moves from process-global into a per-session `Session`
+owned by core. Channels stay transports; the web UI is rebuilt to the new
+contract.
 
-**Tech stack:** Python 3.13, `httpx` (all HTTP, with timeouts), `fastapi` +
-`uvicorn` (web channel), `pytest` (tests), stdlib `difflib` (candidate
-matching), stdlib `json`/`dataclasses`/`enum`. No other dependencies.
+**Tech stack:** Python 3.13, httpx, FastAPI + uvicorn, pytest, Playwright
+(browser E2E, already installed), stdlib elsewhere. No new dependencies
+beyond Playwright.
 
-## Global constraints (from SPEC.md, binding for every ticket)
+## What carries over unchanged from v1 (approved 24/25)
 
-- Nothing hardcoded: no UUID, no model name, no menu, no base URL, no
-  fallbacks. All config from environment; `~/.env` loaded if present, never
-  written, never printed.
-- Missing/empty required env var → exit before the first turn, naming the
-  variable and the file it was expected in.
-- Secrets never appear in logs, transcripts, errors, or the web UI.
-- No regex/keyword parser that produces an order without the model (hard ban).
-- No `subprocess` + `curl` — `httpx` only, explicit timeouts everywhere.
-- No browser speech APIs (`SpeechRecognition`, `speechSynthesis`).
-- No build-time model name anywhere in source, config, prompts, tests, docs.
-- `submit_order` is the only network write; legal only in `CONFIRMED`.
-- Item codes are unique per type, not globally (`tonno` is a pizza and a
-  pasta) — every validation and removal keys on `(type, code)`.
-- Deterministic tests: no network, no LLM (one opt-in live smoke test).
-- German + English, mirrored per turn.
+- `core/order.py` Order/Item/Customer + revision + submit bookkeeping
+- `core/state.py` transitions, invariants 1–5, demotion, terminality,
+  deterministic `remove_item` semantics (now also written into SPEC)
+- `core/menu.py` (type, code) validation, candidates, extras vocabulary
+- `core/pizzasim.py` typed errors, timeouts, list+detail endpoints,
+  submit-timeout recovery (shortlist via list, verify items via detail —
+  exactly what the patched SPEC now demands)
+- `core/tools.py` schemas/dispatch incl. atomic add, error shape
+- `core/agent.py` model loop, retry-once, JSONL logging, stub-model seam
+- CLI channel, prompts, 71 deterministic tests, golden transcripts
 
-## File layout
+## The five binding retrofit conditions (decisions/qa.md) → where honored
 
-```
-core/
-  order.py     Order dataclass: items, customer, revision, state field,
-               read-back tracking, submit bookkeeping. Pure data + snapshots.
-  state.py     OrderState enum + transition functions. Every mutation goes
-               through here; illegal transitions raise TransitionError.
-  menu.py      Immutable Menu snapshot (pizzas, pasta, toppings), one per
-               session; (type, code) validation; extras validation;
-               candidate suggestions via difflib over codes and names.
-  pizzasim.py  httpx client for PizzaSim: get_menu, list_orders,
-               submit_order, check_street; typed errors; timeouts;
-               startup pizzeria check.
-  tools.py     The eight tool JSON schemas + dispatch(tool_name, args) →
-               result dict. Success = full state snapshot; failure =
-               {"error": {code, message, candidates}}.
-  agent.py     Config loading for gateway vars, prompt assembly, the model
-               loop (chat completions + tool calls until a plain assistant
-               message), gateway retry policy, JSONL event logging.
-channels/
-  cli.py       Terminal REPL over the core. Prints assistant text; --verbose
-               shows tool events.
-  web.py       FastAPI on port 8888. Serves static/, POST /chat streaming
-               NDJSON events, speech proxy endpoints, /config for UI
-               feature flags. In-memory session dict.
-  static/      index.html, app.js, style.css — chat UI, NDJSON consumer,
-               push-to-talk recorder (MediaRecorder → upload), TTS toggle.
-prompts/
-  system.de.md German system prompt (default deployment language).
-  system.en.md English system prompt, same policy.
-tests/
-  fixtures/    Recorded real API responses (menu, order created, orders
-               list, 422 bodies, location).
-  test_state.py       State machine, exhaustive incl. every illegal move.
-  test_tools.py       Tool dispatch against fixture-backed fakes.
-  test_transcripts.py Runner for the five golden transcripts.
-  transcripts/        Five scripted conversations as JSON.
-reviews/       One file per review round + scores.md.
-.env.example   Names only.
-README.md      How to run CLI, web, speech; how to test.
-requirements.txt  Pinned: fastapi, uvicorn, httpx, pytest, python-multipart.
-```
-
-Deviation from the SPEC tree, documented: `tests/test_transcripts.py` and
-`requirements.txt` are added (the transcripts need a runner; the deps need
-pinning). Everything listed in SPEC.md exists exactly where listed.
+| Condition | Where in this plan |
+|---|---|
+| 1. `PIZZERIA_LANG` documented | now in SPEC's env table; config section below |
+| 2. Core-owned session factory, immutable tenant | "Session model v2" |
+| 3. Confirm path via one core method | "Confirm control" |
+| 4. Web = substantial rewrite | "Web channel v2" + tickets 6–7 |
+| 5. Totals canonical in core + E2E coverage | "Prices and totals", ticket 1, 9 |
 
 ## Configuration
 
-Each module owns its own env vars and exposes `from_env()`:
-
 | Module | Vars |
 |---|---|
-| `core/agent.py` | `LITELLM_PIZZA_URL`, `LITELLM_PIZZA_KEY`, `LITELLM_PIZZA_MODEL_1`, `PIZZERIA_LANG` (all required; `LITELLM_PIZZA_MODEL_2` read but unused — single-model build) |
+| `core/agent.py` | `LITELLM_PIZZA_URL`, `LITELLM_PIZZA_KEY`, `LITELLM_PIZZA_MODEL_1`, `PIZZERIA_LANG` (required; `LITELLM_PIZZA_MODEL_2` read, unused) |
 | `core/pizzasim.py` | `PIZZASIM_URL`, `PIZZASIM_API_KEY`, `PIZZERIA_ID` (required) |
-| `channels/web.py` | `SPEECH_URL`, `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL`, `SPEECH_TTS_VOICE` (all optional; absence disables speech) |
+| `channels/web.py` | `APP_VERSION` (required) |
+| `channels/speech.py` | `SPEECH_URL`, `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL`, `SPEECH_TTS_VOICE` (all optional; absence disables speech) |
 
-`PIZZERIA_LANG` ∈ {`de`, `en`} is the pizzeria-country greeting language.
-The live API exposes no country field (verified), so per the config-from-env
-rule this deployment fact is a **required** env var — no default, missing →
-startup failure like any other required var (oracle decision,
-`decisions/qa.md`). It selects the system prompt file and the STT language
-hint; it never overrides per-turn language mirroring.
+Loading unchanged: process env, else `~/.env`; missing required var →
+exit before the first turn naming variable and file. `APP_VERSION` must
+match `x.y.z` (regex on the value is config validation, not order
+parsing). Derived URLs, never literal: dashboard
+`{PIZZASIM_URL}/dashboard/pizzerias/{id}`, docs
+`{PIZZASIM_URL}/swagger.html`.
 
-Loading order: process env wins; else `~/.env` if present (parsed key=value,
-never written, never printed). No other sources. A missing required var
-raises `ConfigError("LITELLM_PIZZA_URL is not set (expected in the
-environment or ~/.env)")` and the channel exits before the first turn.
-Logs go to `./logs/` (fixed path, gitignored) — not configurable.
+## Session model v2 (condition 2)
 
-Startup sequence, identical for both channels, all before the first turn:
+`Session` (core/agent.py): `{id, pizzeria_id, pizzeria_name, client,
+menu, lang, order, messages}` — pizzeria fields and client are set at
+creation and never mutated (a tenant switch is a NEW session; invariant 6).
 
-1. Load and validate all required env vars (exit naming var + file).
-2. `GET /pizzerias` with `X-API-Key` — a 401/403 aborts startup ("cannot
-   reach the kitchen system"); `PIZZERIA_ID` not in the returned list is the
-   404-pizzeria case from the error table → process refuses to start;
-   otherwise capture `pizzeria_name` for the system prompt.
-3. `GET /menu` — failure aborts startup with "We're not taking orders right
-   now".
+Core factory `create_session(config, base, pizzeria_id, lang)`:
 
-**Session model.** A session (conversation) = one `Order` + one immutable
-`Menu` snapshot + one message history, bundled in a `Session` object owned
-by the channel. The CLI process is exactly one session and reuses the
-startup menu fetch as its snapshot. The web channel creates a `Session` per
-`session_id`, fetching a **fresh menu snapshot at session creation**; that
-snapshot is immutable for the session's lifetime (spec invariant 5: "menu
-snapshot fetched this session"). A failed session-creation fetch yields the
-"We're not taking orders right now" message for that session only.
+1. `base.list_pizzerias()` (tenant-free call) → id must be present, else
+   typed `NotFoundError` → channel renders "that pizzeria isn't available
+   right now" (session error; process stays up, per the new error row).
+2. Build a tenant-bound `PizzaSim` client for `pizzeria_id`.
+3. Fetch the fresh, immutable menu snapshot for this session (invariant 5).
+4. Render `prompts/system.{lang}.md` with the pizzeria name.
 
-## Order state machine
+Startup (unchanged semantics, now explicit about roles): validate required
+env; `GET /pizzerias` must contain the preselected `PIZZERIA_ID` (else the
+process refuses to start — the startup 404 row); fetch `/menu` once as a
+health check ("We're not taking orders right now" on failure). The
+preselection is only the default for new sessions.
 
-States: `EMPTY`, `COLLECTING`, `READY`, `CONFIRMED`, `SUBMITTED`.
+CLI: one session from `PIZZERIA_ID` + `PIZZERIA_LANG`; no switching (per
+SPEC's language-authority rule and header-only selector).
 
-Order fields: `items: list[Item(type, code, qty, extras)]`,
-`customer: Customer(first_name, street_one) | None`, `revision: int`
-(increments on every basket or customer mutation), `read_back_revision:
-int | None` (set by `read_back`), `state`, `submit_attempted_at: int | None`
-(unix seconds captured immediately **before** the first submit POST — the
-correlation key for timeout recovery), `submit_unknown: bool` (that attempt
-timed out / 5xx'd and is unverified), `result` (order_id, status,
-eta_seconds after submit).
+## Language authority (condition 1)
 
-Derived-state rule after any legal mutation: `SUBMITTED` is terminal and
-`CONFIRMED` is only ever entered by `confirm_order`; otherwise state is
-recomputed as `EMPTY` (no items), `COLLECTING` (items, no customer), `READY`
-(items + customer). A mutation while `CONFIRMED` succeeds and demotes to the
-recomputed state (invariant 2). `set_customer` before any item is legal
-(customer stored, state stays `EMPTY`) — the diagram's path is the common
-case, not an ordering constraint.
+`Session.lang` starts from the channel: CLI and web default =
+`PIZZERIA_LANG`; the web header switch calls `set_language(session, lang)`
+(core), which re-renders `messages[0]` from the prompt file in the new
+language — same policy text, history preserved. Apologies and the STT/TTS
+language read `session.lang`. Reply language stays per-turn mirroring by
+the model (prompt rule) and always wins over the switch, exactly as SPEC
+states. UI chrome strings are a small de/en dictionary in `app.js`, keyed
+by the session language.
 
-Transition table (✓ legal, ✗ → typed error):
+## Prices and totals (condition 5)
 
-| Tool | EMPTY | COLLECTING | READY | CONFIRMED | SUBMITTED |
-|---|---|---|---|---|---|
-| add_items | ✓ | ✓ | ✓ | ✓ demote | ✗ order_closed |
-| remove_item | ✗ empty_basket | ✓ | ✓ | ✓ demote | ✗ order_closed |
-| set_customer | ✓ | ✓ | ✓ | ✓ demote | ✗ order_closed |
-| read_back | ✗ empty_basket | ✗ invalid_state (no customer yet) | ✓ | ✓ (same basket, idempotent) | ✗ order_closed |
-| confirm_order | ✗ invalid_state | ✗ invalid_state | ✓ | ✗ invalid_state (already confirmed) | ✗ order_closed |
-| submit_order | ✗ invalid_state | ✗ invalid_state | ✗ invalid_state | ✓ | ✗ order_closed |
-| get_menu / check_street | ✓ any state, read-only | | | | |
+- `Menu` keeps `price` per (type, code); `as_tool_result()` returns
+  `{code, name, price}` per item plus `toppings[]`.
+- `Item` gains `unit_price`, copied at add time from the session menu
+  snapshot (prices are stable for the session, like the menu itself).
+- `Order.snapshot()` gains per line `unit_price`, `line_total`
+  (= qty × unit_price) and top-level `basket_total` — computed in
+  `core/order.py` only. Money is rounded to cents with `Decimal`;
+  no float accumulation.
+- `read_back` carries the snapshot and therefore the canonical total; the
+  web basket renders the same numbers. Extras carry no API price → lines
+  show base prices; the UI labels extras "not separately priced" — no
+  invented figures.
+- The model never computes prices: the prompt instructs it to quote
+  `price`/`basket_total` from tool results verbatim.
 
-`confirm_order(revision)` additionally requires `revision == order.revision`
-(else `stale_revision`) and `read_back_revision == order.revision` (else
-`read_back_required`). So the only path into `CONFIRMED` is: state `READY`,
-`read_back` called at the current revision, then `confirm_order` naming that
-same revision — exactly the spec's path, nothing broader. Every ✗ cell gets
-a unit test (invariants 1–5).
+## Tools — v1 contract plus prices
 
-Submit-timeout path: `submit_order` sets `submit_attempted_at = now()`
-before its first POST. On httpx timeout or 5xx, the order stays `CONFIRMED`
-with `submit_unknown = True`. The next `submit_order` call sees
-`submit_unknown` and first calls `list_orders()`, shortlisting orders with
-our customer's `first_name` and `created_at >= submit_attempted_at - 60`
-(60s clock-skew allowance); the best candidate is then **verified via the
-detail endpoint** (`GET /pizzerias/{id}/orders/{order_id}`, which carries
-items) — adopted only if its items equal the basket exactly. Verified →
-state `SUBMITTED` with the recovered id. Absent or different items →
-exactly one real retry. List or detail call fails → error `submit_unknown`
-with an honest message ("I'm not sure that went through — let me check"
-phrasing); never a blind re-POST. Any basket/customer mutation clears
-`submit_unknown` and `submit_attempted_at`: the correlation belongs to the
-basket that was confirmed then, and a demoted order must POST fresh.
+Schemas and parameters unchanged (fixed by SPEC). Result changes only:
 
-## Tool schemas
+- `get_menu` → `{menu: {pizzas: [{code, name, price}], pasta: [...],
+  toppings: [...]}, snapshot}`
+- `SNAPSHOT` → `{state, revision, items: [{type, code, name, qty, extras,
+  unit_price, line_total}], basket_total, customer, read_back_done}`
+- everything else exactly as approved in v1 (uniform error shape,
+  atomicity, invalid_quantity, deterministic remove).
 
-All eight tools, OpenAI function-calling format.
+## Confirm control (condition 3)
 
-`SNAPSHOT` (one fixed shape, embedded in **every** success result — this is
-how the per-tool return table and the "full current state" rule compose):
-`{state, revision, items: [{type, code, name, qty, extras}], customer:
-{first_name, street_one} | null, read_back_done: bool}` — never a diff.
+- `read_back` results stream to the UI (they already do); the UI renders a
+  visually distinct read-back panel with a **Bestellen/Confirm** button
+  bound to the streamed `revision`.
+- Click → `POST /confirm {session_id, revision}` → **one core method**
+  `Agent.confirm_and_submit(session, revision, emit)`:
+  1. `tools.dispatch("confirm_order", {revision})` — stale revision or
+     wrong state returns the typed error; it streams to the UI as a
+     notice and nothing is submitted.
+  2. On success `tools.dispatch("submit_order", {})` (full v1 semantics
+     incl. timeout recovery).
+  3. Both calls are appended to `session.messages` as a synthetic
+     assistant `tool_calls` message + `tool` results (OpenAI format), so
+     the model's context stays consistent.
+  4. One model call phrases the outcome (order id in groups, minutes);
+     it streams like a normal turn and is logged.
+- The customer action is a click, not a word; `CONFIRMED` remains
+  reachable only via `confirm_order(revision)`; the transport forwards two
+  identifiers and owns zero logic.
+- CLI keeps the conversational path: customer says yes → model calls
+  `confirm_order` + `submit_order` itself. Both paths converge on dispatch.
 
-| Tool | Parameters (JSON schema) | Success result — exact JSON |
-|---|---|---|
-| `get_menu` | `{}` | `{"menu": {"pizzas": [{code, name}], "pasta": [{code, name}], "toppings": [str]}, "snapshot": SNAPSHOT}` — `name` is the API's single display name, which the verified contract facts show serves both languages |
-| `add_items` | `{items: [{type: enum[pizza,pasta], code: str, qty: int ≥1, extras: [str]}]}` (required: items; extras default `[]`) | `{"snapshot": SNAPSHOT}` (basket + revision live in SNAPSHOT) |
-| `remove_item` | `{type: enum, code: str, qty: int ≥1 optional}` — the spec fixes these params, so when several lines share (type, code) with different extras: absent qty removes **all** matching lines, qty reduces the **most recently added** matching line (deterministic; the snapshot lets the model repair by remove + re-add) | `{"snapshot": SNAPSHOT}` |
-| `set_customer` | `{first_name: str minLength 1, street_one: str optional}` | `{"customer": {first_name, street_one}, "snapshot": SNAPSHOT}` — customer as stored |
-| `read_back` | `{}` | `{"snapshot": SNAPSHOT}` — basket, customer, revision: the material the agent reads out |
-| `confirm_order` | `{revision: int}` | `{"snapshot": SNAPSHOT}` with `state == "CONFIRMED"`, or error if stale |
-| `submit_order` | `{}` | `{"order_id": str, "status": str, "eta_seconds": int, "snapshot": SNAPSHOT}` — the minutes conversion is the model's job, instructed by the prompt |
-| `check_street` | `{street: str}` | `{"street": str, "deliverable": bool, "snapshot": SNAPSHOT}` — the never-claim-verified rule lives in the prompt, not the tool |
+## Web channel v2 (condition 4 — a rewrite, named as such)
 
-Failure shape: `{"error": {"code": "<one of the codes below>", "message":
-"<speakable sentence>", "candidates": [up to 3 of {type, code, name}]}}`.
+Server (`channels/web.py`):
 
-Error codes: `unknown_item` (with candidates), `invalid_extra` (with
-candidate toppings), `invalid_quantity` (non-integer or < 1 — the tool does
-not parse "zwei"), `empty_basket`, `invalid_state`, `stale_revision`,
-`read_back_required`, `order_closed`, `submit_failed`, `submit_unknown`,
-`api_unavailable`, `not_in_basket` (remove_item for a line that isn't there).
+- `GET /config` → `{version, speech, lang_default, pizzerias:
+  [{id, name}] | null, preselected_id, dashboard_base, docs_url}`.
+  `pizzerias: null` when `GET /pizzerias` failed at request time — the UI
+  then shows "list unavailable" and no selector (no fallback entry).
+- `POST /session {pizzeria_id?, lang?}` → creates a Session (defaults:
+  preselected id, `PIZZERIA_LANG`), returns `{session_id, pizzeria_id,
+  pizzeria_name, lang}`. Invalid id → 409 with the session-error text.
+- `POST /chat {session_id, text|null}` → NDJSON stream (unchanged
+  protocol; `text: null` = greeting turn). 404 for unknown session (the
+  UI then creates a fresh one). Per-session lock → 409 on overlap.
+- `POST /confirm {session_id, revision}` → NDJSON stream (same event
+  shapes) via `confirm_and_submit`.
+- `POST /language {session_id, lang}` → `{lang}`; core `set_language`.
+- `GET /health` → `{api: "ok"|"down", gateway: "ok"|"down"|"unknown"}` —
+  `api` from a live `GET /pizzerias` with 3s timeout; `gateway` from the
+  outcome of the most recent model call (unknown before the first).
+  Polled by the UI every 30s for the footer connection state.
+- Speech proxy endpoints move to `channels/speech.py` (deliverable):
+  `SpeechService` class (config, probe, stt(audio, lang), tts(text,
+  lang)); web.py keeps only the thin route handlers.
 
-Validation order in `add_items`: every item's `(type, code)` against the menu
-snapshot and every extra against `toppings[]`; any failure rejects the whole
-call atomically (no partial adds), returning the first error with candidates
-from `difflib.get_close_matches` over codes and lowercased names of the same
-type (falling back to the other type's matches so "pasta tonno" asked as
-pizza still gets a useful suggestion).
+UI (`channels/static/` — rebuilt):
 
-## Agent loop (`core/agent.py`)
+- **Header:** pizzeria name (prominent, from the session), selector
+  (name + first 8 UUID chars, from `/config.pizzerias`), dashboard link
+  (`dashboard_base` + id, `target="_blank"`), language switch DE/EN,
+  Start over. Selector change and Start over both: abort any in-flight
+  stream (AbortController), clear the chat and basket views, create a NEW
+  session (fresh id — invariant 6 by construction), render the greeting
+  turn.
+- **Footer:** `version`, full selected UUID (selectable text), connection
+  badges from `/health`, docs link.
+- **Basket panel:** rendered from every `snapshot` in tool results /
+  `done` events: lines with qty × name, `line_total`, `basket_total`;
+  after `state == "SUBMITTED"`: locked, shows order id + "submitted", no
+  control on the page can modify or resubmit (confirm button removed,
+  input stays usable for a new conversation via Start over / new session).
+- **Read-back panel:** on a `read_back` tool result: visually distinct
+  block + confirm button bound to the streamed revision.
+- **Answer invariant** ("no message ends unanswered"):
+  - send → immediate "agent is working" indicator;
+  - tool events render as they stream (collapsible steps, visually
+    distinct) — never discarded (anti-pattern 6);
+  - `done` without a preceding `assistant` event in the turn → rendered
+    notice "the agent did not answer — resend?";
+  - fetch error / abort / non-2xx → rendered notice naming which
+    (error, timeout, connection lost) + a resend button that re-posts the
+    same text;
+  - all notices in the session language, plain words.
 
-- Messages: `[system] + history`. System prompt = `prompts/system.{lang}.md`
-  with `{pizzeria_name}` substituted (captured in startup step 2), where
-  `lang = PIZZERIA_LANG` — the pizzeria-country greeting language, a
-  required env var (see Configuration), **not** a channel or UI control.
-  Both prompt files state the same per-turn rule: always answer in the
-  language of the customer's latest message (German or English), unprompted.
-  Language mirroring is model behaviour; the runtime never detects language.
-- Per turn: POST `{LITELLM_PIZZA_URL}/chat/completions`, bearer
-  `LITELLM_PIZZA_KEY`, model `LITELLM_PIZZA_MODEL_1`, `tools` = the eight
-  schemas. While the response contains `tool_calls`: dispatch each through
-  `core/tools.py`, append tool result messages, call again. Stop on a plain
-  assistant message or after 8 tool iterations (loop guard → apology).
-- Gateway timeout (httpx timeout, 30s): one retry, then abort the turn with
-  the plain apology from the error table. Gateway 4xx/5xx: no retry, abort
-  turn, log.
-- The loop emits events to a callback: `user`, `assistant`, `tool_call`,
-  `tool_result`, `state`, `error` — the CLI prints them (verbose), the web
-  channel streams them as NDJSON, and every event is also appended as one
-  JSON line to `logs/agent-<session>.jsonl` (fixed path, gitignored). Log
-  records carry no secrets: config values never enter events; tool results
-  are logged as-is (they contain no secrets by construction).
+## CLI v2
 
-## Conversation policy → prompts
+Unchanged flow; read_back output now includes line totals and the basket
+total from the snapshot (printing what core computed, no arithmetic).
 
-`prompts/system.de.md` / `system.en.md`, same content in two languages, calm
-and short (no shouting — the state machine enforces the rules). Each covers:
-greet once in the file's language and offer help in one sentence; mirror the
-customer's language per turn (German ↔ English); one question per turn; menu
-facts only from `get_menu`; collect first name (confirm spelling when it
-came from speech) and street, street declinable; read back via `read_back`
-and wait for an explicit yes — "mhm"/silence is not yes, ask once more, then
-offer to start over; never announce success before `submit_order` returns;
-state order id in speakable groups and ETA in minutes; errors in plain
-language, never codes or JSON; never claim the address was checked for
-deliverability; when the reply will be spoken, at most three menu items plus
-an invitation.
-
-## Web channel protocol
-
-- `GET /` → static UI. `GET /config` → `{speech: bool, pizzeria: str}`
-  (`speech` true only if `SPEECH_URL` set and a probe succeeded at startup;
-  `pizzeria` is the display name from startup step 2 — the customer must
-  see which pizzeria they are ordering at). No language field: language is
-  never a UI control — the greeting comes from `PIZZERIA_LANG`, mirroring
-  is model behaviour.
-- `POST /chat` body `{session_id, text}` → `application/x-ndjson` stream of
-  the agent-loop events, ending with `{"type": "done", "state": ...}`.
-  Turns are serialized per session (one `Order` per conversation = one turn
-  at a time); a second request while one is in flight gets `409`.
-- `POST /speech/stt`: multipart audio forwarded to
-  `{SPEECH_URL}/v1/audio/transcriptions` with `SPEECH_STT_MODEL` and
-  `PIZZERIA_LANG` as the language hint (an STT hint only — it never
-  influences assistant output language) → `{text}`. `POST /speech/tts` body `{text}` forwarded to
-  `{SPEECH_URL}/v1/audio/speech` with `SPEECH_TTS_MODEL` +
-  `SPEECH_TTS_VOICE` → audio bytes. Proxying keeps the speech URL and
-  models server-side.
-- UI: chat pane, collapsible per-turn tool-step feed (rendered from
-  `tool_call`/`tool_result` events), push-to-talk mic button (MediaRecorder,
-  visible recording state, click-start/click-stop), speaker toggle
-  (default off, applies only to the final assistant message). If
-  `/config.speech` is false, mic and speaker are simply not rendered; text
-  chat is fully usable. A failed STT/TTS call shows a small notice and never
-  touches the order.
-
-## Error handling (SPEC table → implementation)
+## Error handling — new rows on top of v1's table
 
 | Situation | Mechanism |
 |---|---|
-| Gateway timeout | httpx timeout 30s, one retry in agent loop, then apology; test via transport stub |
-| PizzaSim 401/403 | typed `AuthError`, no retry, turn aborted with "can't reach the kitchen system" |
-| 404 pizzeria at startup | startup check refuses to start with clear stderr message |
-| 422 validation | typed `ValidationError(details)` → tool error `submit_failed` with field text, basket kept |
-| 5xx on submit | no blind retry; `submit_unknown=True`, honest message |
-| Submit timeout | same as 5xx + verify-via-list recovery on the next attempt |
-| Unknown item / extra | `unknown_item` / `invalid_extra` + candidates |
-| Empty basket at submit | `invalid_state` from transition table |
-| Menu fetch fails at start | both channels exit with "We're not taking orders right now" |
+| Runtime pizzeria selection invalid | `create_session` NotFoundError → 409 → UI notice; process stays up |
+| Pizzeria list fetch fails | `/config.pizzerias = null` → "list unavailable", no selector, no fallback entry |
+| Stream ends without final message | UI-side detection via `done`-without-`assistant` → notice + resend |
+| Gateway unreachable | existing retry-once → apology (now also an `assistant` event, v1 fix) + UI resend offer |
+| Speech service down | probe fails → controls not rendered; per-call failure → notice, order untouched |
+
+All other rows: unchanged v1 mechanics, already tested.
 
 ## Testing
 
-- `test_state.py`: every ✗ cell of the transition table, every invariant
-  1–5, revision/read-back staleness, demotion from CONFIRMED, terminality of
-  SUBMITTED, empty-basket edge (remove to empty and re-add).
-- `test_tools.py`: dispatch against a `Menu` built from
-  `fixtures/menu.json` and a fake PizzaSim client returning fixture
-  payloads: unknown code candidates, per-type code collision (`tonno`),
-  invalid extra, `"zwei"` quantity, atomic multi-item add, remove semantics,
-  submit success mapping (`order_id`, `status`, `eta_seconds`), submit
-  timeout → unknown → recovery-by-list (correlation via
-  `submit_attempted_at`), 422 mapping, snapshot completeness.
-- `test_transcripts.py` + `transcripts/`: five golden conversations (happy
-  path, correction "no make that three", unknown item, mind change after
-  read-back, submit timeout) as JSON: each step = user text, scripted model
-  tool calls (a stub model replays them), expected tool result codes,
-  expected final state and exact call sequence. No network, no LLM.
-- Live acceptance test (`PIZZA_LIVE_TEST=1` opt-in, in `test_tools.py`),
-  per SPEC "What done looks like": full conversation at the tool layer,
-  submit, then read the pizzeria's orders back and assert the order is
-  listed with the right customer and **exactly** the read-back items and
-  quantities (via the order-detail endpoint). The only test touching the
-  real API.
-- Speech: manual checklist in README (dictation, name correction, menu
-  question, `SPEECH_URL` unset run).
+- **Unit/tool (extend v1's 71):** prices copied at add time; `line_total`
+  / `basket_total` incl. Decimal rounding; snapshot shape; session factory
+  (valid id, unknown id, list failure); `set_language` re-render;
+  `confirm_and_submit` (happy, stale revision, submit timeout path);
+  `APP_VERSION` validation.
+- **Golden transcripts:** unchanged five; runner asserts extended snapshot
+  keys where relevant.
+- **Browser E2E (`tests/test_web_e2e.py`, offline, not optional):**
+  in-process **stub PizzaSim** (fixtures: two pizzerias, menu with prices)
+  and **stub gateway** (scripted tool-calling model) served locally;
+  the app under test started on an ephemeral port with env pointing at the
+  stubs; Playwright (chromium, headless) asserts against the DOM:
+  1. full order: greeting → price question (price from menu rendered) →
+     add items → name → read-back panel → **confirm click** → submitted
+     lock + order id visible; basket totals correct at each step;
+  2. pizzeria switch: selector → fresh conversation, header + footer UUID
+     change, basket cleared;
+  3. failure — tool error: unknown item → candidates visible in steps,
+     answer rendered;
+  4. failure — gateway unreachable: stub gateway refuses → apology text
+     rendered + resend control;
+  5. failure — stream ends without final message: stub cuts the stream →
+     UI notice + resend control.
+- **Live acceptance test:** as in v1, updated to SPEC wording (presence
+  via list, customer/items/qty via detail endpoint). Opt-in
+  `PIZZA_LIVE_TEST=1`.
+- **Speech:** manual checklist (README) unchanged + STT language follows
+  the session language.
 
-## Tickets
+## Deliverables delta vs repo
 
-1. **Scaffold + config.** `.env.example`, `requirements.txt`, README
-   skeleton, gitignore for `logs/`, env loader (process env, else `~/.env`)
-   with named-var `ConfigError`.
-   ☐ `.env.example` lists all 12 vars (incl. `PIZZERIA_LANG`), names only
-   ☐ missing var exits pre-turn with var + file name ☐ nothing prints
-   values.
-2. **Order + state machine + tests.** `core/order.py`, `core/state.py`,
-   `tests/test_state.py`.
-   ☐ all five invariants tested ☐ every ✗ cell tested ☐ demotion +
-   revision staleness tested ☐ pytest green.
-3. **Menu.** `core/menu.py`, `fixtures/menu.json` (recorded), validation +
-   candidates. ☐ (type, code) validation ☐ `tonno` collision test ☐
-   extras vocabulary ☐ ≤3 candidates.
-4. **PizzaSim client.** `core/pizzasim.py`, typed errors, timeouts,
-   fixtures for orders/422/location, httpx MockTransport tests.
-   ☐ every error class mapped ☐ no call without timeout ☐ submit returns
-   typed result ☐ list_orders parsed.
-5. **Tools.** `core/tools.py` schemas + dispatch, `tests/test_tools.py`.
-   ☐ schemas match this plan exactly ☐ atomic add ☐ error shape uniform
-   ☐ snapshot on every success.
-6. **Agent loop + prompts + transcripts.** `core/agent.py`, both prompts,
-   stub model, five transcripts.
-   ☐ tool loop with guard ☐ gateway retry-once ☐ JSONL logging ☐ five
-   transcripts green.
-7. **CLI.** `channels/cli.py`. ☐ full conversation against real API
-   possible ☐ --verbose shows tool events ☐ startup checks enforced.
-8. **Web text channel.** `channels/web.py` + `static/` (no speech yet).
-   ☐ port 8888 ☐ NDJSON steps visible in UI ☐ per-session orders ☐
-   startup checks enforced.
-9. **Speech.** Proxy endpoints + mic/TTS UI.
-   ☐ push-to-talk with visible state ☐ TTS off by default, final message
-   only ☐ `SPEECH_URL` unset → no mic, no speaker, text works ☐ speech
-   failure never touches the order.
-10. **Harden + docs.** Walk the SPEC error table end to end, README
-    complete, `.env.example` final, live smoke test.
-    ☐ each error row demonstrably handled ☐ README covers all channels +
-    speech + tests ☐ full suite green.
+New: `channels/speech.py`, `tests/test_web_e2e.py`. Rebuilt:
+`channels/web.py`, `channels/static/*`. Extended: `core/menu.py`,
+`core/order.py`, `core/tools.py`, `core/agent.py`, prompts (prices,
+verbatim-price rule), `README.md`, `.env.example` (+`APP_VERSION`),
+`requirements.txt` (+playwright). Everything else stands as approved.
 
-Each ticket ≤ 1h, tests live in the ticket that introduces the behaviour.
+## Tickets (each ≤ 1h, tests in the ticket that introduces the behaviour)
+
+1. **Prices & totals in core.** Menu price, `Item.unit_price`,
+   snapshot totals (Decimal), get_menu result, prompt rule.
+   ☐ totals only in core ☐ rounding tested ☐ v1 suite still green.
+2. **Session factory & tenancy.** Session v2 fields, `create_session`,
+   client per session, agent uses `session.client`, startup preselection
+   check kept. ☐ unknown id → typed error ☐ tenant immutable ☐ tests.
+3. **Language authority.** `Session.lang`, `set_language` re-render,
+   apologies/STT via session.lang. ☐ switch test ☐ no process-global lang.
+4. **Confirm path.** `Agent.confirm_and_submit` + synthetic messages.
+   ☐ stale revision streams error, nothing submitted ☐ happy path test
+   ☐ timeout-recovery reachable from this path.
+5. **Web API surface.** /config, /session, /confirm, /language, /health,
+   session 404/409 semantics, speech extraction to `channels/speech.py`.
+   ☐ httpx TestClient tests with stub PizzaSim ☐ no order logic in routes.
+6. **Web UI: frame.** Header (name, selector, dashboard link, language,
+   start over), footer (version, UUID, health badges, docs), i18n chrome.
+   ☐ switch/start-over create fresh session + abort in-flight stream.
+7. **Web UI: conversation contract.** Basket panel, read-back panel +
+   confirm button, working indicator, done-without-assistant notice,
+   error/resend paths, submitted lock.
+   ☐ every notice in session language ☐ no discarded stream events.
+8. **Browser E2E suite.** Stub PizzaSim + stub gateway + Playwright;
+   scenarios 1–5 above. ☐ fully offline ☐ DOM assertions only.
+9. **Harden + docs.** Error-table walk incl. new rows, README (all
+   channels + E2E + speech checklist), `.env.example`, `APP_VERSION`
+   start at `2.0.0`. ☐ full suite green ☐ live acceptance re-run.
+
+Review protocol: this plan goes to the reviewer (Issue gate) before any
+code; implementation follows only after APPROVED under the SPEC rubric.
