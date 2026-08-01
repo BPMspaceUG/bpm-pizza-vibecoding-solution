@@ -340,6 +340,36 @@ def test_e2e_gateway_unreachable_leaves_visible_message(page_factory,
     page.close()
 
 
+def test_e2e_confirm_failure_offers_retry(page_factory, stack):
+    """A confirm whose phrasing turn yields no answer leaves a visible
+    notice with a retry that re-runs the SAME confirm action — and the
+    state machine guarantees the retry can never place a second order."""
+    stack["gateway"].mode = "ok"
+    page = open_app(page_factory, stack)
+    page.fill("#text", "Zwei Margherita bitte")
+    page.click("#send")
+    page.wait_for_selector("#basket-lines li", timeout=30000)
+    page.fill("#text", "Ich heiße Eva")
+    page.click("#send")
+    page.wait_for_selector(".readback button:enabled", timeout=30000)
+
+    stack["gateway"].mode = "empty"
+    try:
+        page.locator(".readback button:enabled").click()
+        page.wait_for_selector(".notice button", timeout=30000)  # retry
+        # the dispatches already ran: the order is submitted and visible
+        page.wait_for_selector("#submitted-banner:not([hidden])",
+                               timeout=15000)
+    finally:
+        stack["gateway"].mode = "ok"
+    before = page.locator(".msg.assistant").count()
+    page.locator(".notice button").last.click()  # retry the confirm
+    page.wait_for_function(
+        f"document.querySelectorAll('.msg.assistant').length > {before}",
+        timeout=30000)  # the agent answers; never a second order
+    page.close()
+
+
 def test_e2e_stream_without_answer_offers_resend(page_factory, stack):
     stack["gateway"].mode = "ok"
     page = open_app(page_factory, stack)

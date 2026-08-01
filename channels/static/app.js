@@ -93,14 +93,19 @@ function addMsg(cls, text) {
   return div;
 }
 
-function notice(text, resendText) {
+function notice(text, retry) {
+  /* retry: a string re-sends it as a chat message; a function re-runs the
+     failed action (e.g. a confirm with its revision). */
   const div = document.createElement("div");
   div.className = "notice";
   div.appendChild(document.createTextNode(text));
-  if (resendText !== undefined) {
+  if (retry !== undefined) {
     const btn = document.createElement("button");
     btn.textContent = t("resend");
-    btn.onclick = () => { div.remove(); sendTurn(resendText); };
+    btn.onclick = () => {
+      div.remove();
+      if (typeof retry === "function") retry(); else sendTurn(retry);
+    };
     div.appendChild(btn);
   }
   chat.appendChild(div);
@@ -179,7 +184,7 @@ function showReadback(snapshot) {
 
 /* ---------- streaming --------------------------------------------------- */
 
-async function readStream(response, resendText) {
+async function readStream(response, retry) {
   const steps = document.createElement("details");
   steps.className = "steps";
   steps.innerHTML = `<summary>${t("steps")}</summary>`;
@@ -223,13 +228,13 @@ async function readStream(response, resendText) {
     }
   }
   if (!steps.querySelector("pre")) steps.remove();
-  if (!assistantAnswered) notice(t("notAnswered"), resendText);
+  if (!assistantAnswered) notice(t("notAnswered"), retry);
   return finalText;
 }
 
 const STREAM_TIMEOUT_MS = 120000;
 
-async function streamPost(path, body, resendText) {
+async function streamPost(path, body, retry) {
   currentAbort = new AbortController();
   // Real client-side timeout: covers the request AND the streamed body,
   // so the timeout notice + resend control can actually occur.
@@ -249,24 +254,27 @@ async function streamPost(path, body, resendText) {
       signal,
     });
     if (res.status === 404) {
-      // The server no longer knows this session: recreate transparently,
-      // keep the customer's message recoverable via resend.
+      // The server no longer knows this session: recreate transparently.
+      // A chat message stays recoverable via resend; a pending confirm is
+      // NOT re-offered — the new session holds a new, empty order, so its
+      // revision would be meaningless.
       working.remove();
       await startSession(session.pizzeriaId);
-      notice(t("sessionLost"), resendText);
+      notice(t("sessionLost"),
+             typeof retry === "string" ? retry : undefined);
       $("send").disabled = false;
       return "";
     }
     if (res.status === 409) { working.remove(); notice(t("busy")); return ""; }
     if (!res.ok) throw new Error("http");
     working.remove();
-    finalText = await readStream(res, resendText);
+    finalText = await readStream(res, retry);
   } catch (err) {
     working.remove();
     if (err.name === "AbortError") { /* deliberate: switch/start-over */ }
-    else if (err.name === "TimeoutError") notice(t("errTimeout"), resendText);
-    else if (err.message === "http") notice(t("errHttp"), resendText);
-    else notice(t("errNetwork"), resendText);
+    else if (err.name === "TimeoutError") notice(t("errTimeout"), retry);
+    else if (err.message === "http") notice(t("errHttp"), retry);
+    else notice(t("errNetwork"), retry);
   }
   $("send").disabled = false;
   $("text").focus();
@@ -281,8 +289,12 @@ async function sendTurn(text, spoken = false) {
 }
 
 async function confirmOrder(revision) {
+  // The retry re-runs the confirm with the SAME revision: if the first
+  // attempt actually went through, the state machine refuses it and the
+  // agent says so — never a second order.
   const finalText = await streamPost(
-    "/confirm", { session_id: session.id, revision });
+    "/confirm", { session_id: session.id, revision },
+    () => confirmOrder(revision));
   if (finalText && cfg.speech && $("tts-toggle").checked) speak(finalText);
 }
 
