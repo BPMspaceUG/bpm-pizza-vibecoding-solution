@@ -145,3 +145,17 @@ Round 16: completeness 5, correctness 5, error_handling 4, simplicity 4,
 spec_compliance 5 — TOTAL 23/25, VERDICT: APPROVED.
 Note: rounds 15-16 amendments live verbatim in Issue #2 (a repo hook
 gates direct PLAN.md edits); PLAN.md sync pending operator decision.
+
+## Rounds 17-19 — implementation v2 (PLAN v2 execution)
+
+Round 17 (reviews/round17-impl2.md): completeness 4, correctness 4,
+error_handling 3, simplicity 4, spec_compliance 3 — TOTAL 18/25,
+CHANGES_REQUIRED (sticky spoken note, 404 session path, client timeout,
+clear-before-switch — all applied).
+Round 18 (reviews/round18-impl2.md): completeness 4, correctness 4,
+error_handling 3, simplicity 4, spec_compliance 3 — TOTAL 18/25,
+CHANGES_REQUIRED (retry path for /confirm failures — applied with E2E
+regression).
+Round 19 (reviews/round19-impl2.md): completeness 5, correctness 5,
+error_handling 5, simplicity 4, spec_compliance 5 — TOTAL 24/25,
+VERDICT: APPROVED.
