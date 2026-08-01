@@ -144,6 +144,14 @@ Schemas and parameters unchanged (fixed by SPEC). Result changes only:
      must deal with in front of the customer". It streams like a normal
      turn. The UI additionally refreshes the basket panel from the
      streamed snapshot; nothing is submitted on a failed confirm.
+  4. The phrasing call goes through the **same gateway path as every
+     turn** — same timeout, same retry-once, same apology emitted as an
+     `assistant` event on failure — so `/confirm` satisfies the
+     answer-or-rendered-error invariant even when the gateway dies after
+     the order was submitted (the order id is already in the snapshot the
+     UI received; the apology never claims the order failed). Unit test:
+     gateway failure during post-confirm phrasing → dispatches applied,
+     apology streamed as `assistant`, state consistent.
 - The customer action is a click, not a word; `CONFIRMED` remains
   reachable only via `confirm_order(revision)`; the transport forwards two
   identifiers and owns zero logic.
@@ -172,10 +180,19 @@ Server (`channels/web.py`):
 - `POST /confirm {session_id, revision}` → NDJSON stream (same event
   shapes) via `confirm_and_submit`.
 - `POST /language {session_id, lang}` → `{lang}`; core `set_language`.
-- `GET /health` → `{api: "ok"|"down", gateway: "ok"|"down"|"unknown"}` —
-  `api` from a live `GET /pizzerias` with 3s timeout; `gateway` from the
-  outcome of the most recent model call (unknown before the first).
-  Polled by the UI every 30s for the footer connection state.
+- `GET /health` → `{api: "ok"|"down", gateway: "ok"|"down"|"unknown"}`.
+  Exact semantics: `api` is measured live per `/health` request
+  (`GET /pizzerias`, 3s timeout — ok on 2xx, down otherwise). `gateway`
+  is a **process-wide** last-known status: `unknown` until the first
+  model call anywhere; every gateway call by any session through either
+  `/chat` or `/confirm` (both share the single Agent gateway path) sets
+  it — `ok` on a successful completion, `down` when a call exhausts its
+  retry and aborts the turn; the next success flips it back to `ok`.
+  `/health` itself never calls the gateway (no cost, no side effects).
+  Polled by the UI every 30s for the footer badges. Tests: TestClient —
+  fresh app → `unknown`; scripted turn → `ok`; stub gateway failure →
+  `down`; subsequent success → `ok`; `api` flips with the stub PizzaSim
+  up/down. E2E asserts the badges render these states.
 - Speech proxy endpoints move to `channels/speech.py` (deliverable):
   `SpeechService` class (config, probe, stt(audio, lang), tts(text,
   lang)); web.py keeps only the thin route handlers.
@@ -280,7 +297,14 @@ coverage, not only tool-level tests:
   stubs; Playwright (chromium, headless) asserts against the DOM:
   1. full order: greeting → price question (price from menu rendered) →
      add items → name → read-back panel → **confirm click** → submitted
-     lock + order id visible; basket totals correct at each step;
+     lock + order id visible; basket totals correct at each step. The
+     same scenario asserts the full header/footer contract in the DOM:
+     pizzeria name in the header; selector entries "name + short UUID";
+     dashboard link `href` ending `/dashboard/pizzerias/{selected id}`
+     with `target="_blank"`; docs link `href` ending `/swagger.html`;
+     footer showing `APP_VERSION` verbatim, the full selected UUID as
+     selectable text, and the connection badges (gateway `unknown`
+     before the first turn, `ok` after it; api `ok`);
   2. pizzeria switch: selector → fresh conversation, header + footer UUID
      change, basket cleared; language switch to EN → subsequent UI
      notices render in English;
