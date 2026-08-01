@@ -121,3 +121,12 @@ VERDICT: APPROVED
 Verified with a real headless Chromium against the public URL
 (isSecureContext=false): no JS errors, greeting, pizzeria name in header,
 typed order question answered, steps visible, speech controls hidden.
+
+## Rounds 11-13 — SPEC v3 analysis + patched-spec gate (Issue #1)
+
+Round 11 (reviews/round11-spec-v3-analysis.md): spec v3 analysis, VERDICT
+NEEDS PATCHES, 8-point patch list.
+Round 12 (reviews/round12-spec-gate-reject.md, Issue #1): Judge REJECT —
+patch 2 incomplete in error table, prose, and acceptance-test wording.
+Round 13 (reviews/round13-spec-gate-approve.md, Issue #1): Judge APPROVE —
+patched SPEC.md is build-ready. (Document gate, rubric not applicable.)
