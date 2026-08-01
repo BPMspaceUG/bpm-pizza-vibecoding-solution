@@ -456,6 +456,175 @@ def test_check_street(menu, fake):
     assert result["deliverable"] is True and "snapshot" in result
 
 
+# --- session factory, language, confirm path (tickets 2-4) ----------------
+
+from core.agent import (  # noqa: E402
+    Agent,
+    AgentConfig,
+    GatewayError,
+    create_session,
+    set_language,
+)
+
+
+class FakeBase(FakeClient):
+    """FakeClient plus the tenant-free surface the session factory uses."""
+
+    def __init__(self, pizzerias=None):
+        super().__init__()
+        self.pizzeria_id = "pz-default"
+        self.pizzerias = pizzerias or [
+            {"id": "pz-default", "name": "Pizzeria Default"},
+            {"id": "pz-two", "name": "Pizzeria Two"},
+        ]
+
+    def list_pizzerias(self):
+        return self.pizzerias
+
+    def get_menu(self):
+        return fixture("menu.json")
+
+    def for_pizzeria(self, pizzeria_id):
+        clone = FakeBase(self.pizzerias)
+        clone.pizzeria_id = pizzeria_id
+        return clone
+
+
+def config_stub(lang="de"):
+    return AgentConfig(url="http://unused", key="unused",
+                       model="stub", lang=lang)
+
+
+def test_create_session_defaults_to_preselection():
+    base = FakeBase()
+    session = create_session(config_stub(), base)
+    assert session.pizzeria_id == "pz-default"
+    assert session.pizzeria_name == "Pizzeria Default"
+    assert session.client.pizzeria_id == "pz-default"
+    assert session.lang == "de"
+    assert session.menu.display_name("pizza", "margherita") == "Margherita"
+    assert "Pizzeria Default" in session.messages[0]["content"]
+
+
+def test_create_session_explicit_tenant_is_immutable_choice():
+    session = create_session(config_stub(), FakeBase(), "pz-two", "en")
+    assert session.pizzeria_id == "pz-two"
+    assert session.client.pizzeria_id == "pz-two"
+    assert session.lang == "en"
+
+
+def test_create_session_unknown_pizzeria_is_session_error():
+    with pytest.raises(NotFoundError):
+        create_session(config_stub(), FakeBase(), "pz-vanished")
+
+
+def test_set_language_rerenders_system_prompt_in_place():
+    session = create_session(config_stub(), FakeBase())
+    history_before = len(session.messages)
+    german = session.messages[0]["content"]
+    set_language(session, "en")
+    assert session.lang == "en"
+    assert session.messages[0]["content"] != german
+    assert "Pizzeria Default" in session.messages[0]["content"]
+    assert len(session.messages) == history_before  # history preserved
+
+
+def test_apology_follows_session_language():
+    def dead(messages, tool_schemas):
+        raise GatewayError("gateway timed out twice")
+    session = create_session(config_stub(), FakeBase())
+    set_language(session, "en")
+    text = Agent(config_stub(), chat_fn=dead).run_turn(session, "hi")
+    assert "sorry" in text.lower()
+
+
+def test_spoken_flag_appends_style_note():
+    def say(messages, tool_schemas):
+        return {"content": "ok"}
+    session = create_session(config_stub(), FakeBase())
+    agent = Agent(config_stub(), chat_fn=say)
+    agent.run_turn(session, "hallo", spoken=True)
+    assert any(m["role"] == "system" and "vorgelesen" in m["content"]
+               for m in session.messages[1:])
+    before = len(session.messages)
+    agent.run_turn(session, "hallo")
+    assert not any(m["role"] == "system"
+                   for m in session.messages[before:])
+
+
+def confirm_ready_session(chat_fn):
+    session = create_session(config_stub(), FakeBase())
+    fake = session.client
+    tools.dispatch(session.order, session.menu, fake, "add_items",
+                   {"items": [{"type": "pizza", "code": "margherita",
+                               "qty": 2}]})
+    tools.dispatch(session.order, session.menu, fake, "set_customer",
+                   {"first_name": "Marco"})
+    tools.dispatch(session.order, session.menu, fake, "read_back", {})
+    return session, Agent(config_stub(), chat_fn=chat_fn)
+
+
+def test_confirm_and_submit_happy_path():
+    def phrase(messages, tool_schemas):
+        return {"content": "Bestellt!"}
+    session, agent = confirm_ready_session(phrase)
+    events = []
+    text = agent.confirm_and_submit(session, session.order.revision,
+                                    events.append)
+    assert text == "Bestellt!"
+    assert session.order.state is State.SUBMITTED
+    tool_names = [e["tool"] for e in events if e["type"] == "tool_call"]
+    assert tool_names == ["confirm_order", "submit_order"]
+    # synthetic history is model-shaped: assistant tool_calls + tool result
+    roles = [m["role"] for m in session.messages]
+    assert roles.count("tool") == 2
+    assert session.messages[-1]["role"] == "assistant"
+
+
+def test_confirm_with_stale_revision_submits_nothing():
+    def phrase(messages, tool_schemas):
+        return {"content": "Da hat sich etwas geändert."}
+    session, agent = confirm_ready_session(phrase)
+    stale = session.order.revision
+    tools.dispatch(session.order, session.menu, session.client,
+                   "add_items", {"items": [{"type": "pasta",
+                                            "code": "pesto", "qty": 1}]})
+    events = []
+    agent.confirm_and_submit(session, stale, events.append)
+    errors = [e["result"]["error"]["code"] for e in events
+              if e["type"] == "tool_result" and "error" in e["result"]]
+    assert errors == ["stale_revision"]
+    assert session.client.submits == 0
+    assert session.order.state is not State.SUBMITTED
+    # the failed dispatch is in the history exactly like a model call
+    assert session.messages[-2]["role"] == "tool"
+
+
+def test_confirm_gateway_death_still_answers():
+    """Answer-or-rendered-error invariant on /confirm: dispatches applied,
+    apology streamed as an assistant event."""
+    def dead(messages, tool_schemas):
+        raise GatewayError("gateway request failed")
+    session, agent = confirm_ready_session(dead)
+    events = []
+    text = agent.confirm_and_submit(session, session.order.revision,
+                                    events.append)
+    assert session.order.state is State.SUBMITTED  # order went through
+    assert any(e["type"] == "assistant" for e in events)
+    assert text  # the apology is the rendered answer
+
+
+def test_gateway_status_callback_reports_down():
+    statuses = []
+    agent = Agent(AgentConfig(url="http://127.0.0.1:9", key="k",
+                              model="stub", lang="de"),
+                  status_cb=statuses.append)
+    session = create_session(config_stub(), FakeBase())
+    text = agent.run_turn(session, "hi")  # closed port → down + apology
+    assert statuses and statuses[-1] == "down"
+    assert text
+
+
 # --- the live acceptance test (opt-in) ------------------------------------
 # SPEC "What done looks like": full conversation, submit, then read the
 # pizzeria's orders back and assert the order is there with the right

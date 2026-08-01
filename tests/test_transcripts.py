@@ -84,8 +84,9 @@ def test_golden_transcript(path):
                          model="stub", lang="de")
     menu = Menu(json.loads((FIXTURES / "menu.json").read_text()))
     session = Session(order=Order(), menu=menu,
-                      messages=[{"role": "system", "content": "stub"}])
-    agent = Agent(config, client, chat_fn=stub)
+                      messages=[{"role": "system", "content": "stub"}],
+                      client=client)
+    agent = Agent(config, chat_fn=stub)
 
     calls, error_codes = [], []
 
@@ -130,8 +131,9 @@ def test_gateway_timeout_apology():
                          model="stub", lang="en")
     menu = Menu(json.loads((FIXTURES / "menu.json").read_text()))
     session = Session(order=Order(), menu=menu,
-                      messages=[{"role": "system", "content": "stub"}])
-    agent = Agent(config, ScriptedClient("ok"), chat_fn=flaky)
+                      messages=[{"role": "system", "content": "stub"}],
+                      client=ScriptedClient("ok"), lang="en")
+    agent = Agent(config, chat_fn=flaky)
     text = agent.run_turn(session, "hello")
     assert "sorry" in text.lower()
     assert session.order.state.value == "EMPTY"  # turn aborted cleanly

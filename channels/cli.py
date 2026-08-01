@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from core.agent import Agent, AgentConfig, Session, startup
+from core.agent import Agent, AgentConfig, create_session, startup
 from core.pizzasim import ConfigError, PizzaSimError
 
 
@@ -35,7 +35,10 @@ def main() -> int:
 
     try:
         config = AgentConfig.from_env()
-        client, pizzeria_name, menu = startup(config)
+        client, pizzeria_name, _menu = startup(config)
+        # One CLI process = one session at the preselected pizzeria in
+        # PIZZERIA_LANG (no switching in this channel, per SPEC).
+        session = create_session(config, client)
     except (ConfigError, ValueError) as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 1
@@ -44,8 +47,7 @@ def main() -> int:
               "We're not taking orders right now.", file=sys.stderr)
         return 1
 
-    agent = Agent(config, client)
-    session = Session.create(config, menu, pizzeria_name)
+    agent = Agent(config)
     emit = make_emit(args.verbose)
 
     print(f"[{pizzeria_name} — type your order, Ctrl-D to hang up]")

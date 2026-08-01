@@ -88,12 +88,21 @@ class PizzaSim:
     def __init__(self, base_url: str, api_key: str, pizzeria_id: str,
                  transport: httpx.BaseTransport | None = None):
         self.pizzeria_id = pizzeria_id
+        self.base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._transport = transport
         self._client = httpx.Client(
-            base_url=base_url.rstrip("/"),
+            base_url=self.base_url,
             headers={"X-API-Key": api_key},
             timeout=_TIMEOUT,
             transport=transport,
         )
+
+    def for_pizzeria(self, pizzeria_id: str) -> "PizzaSim":
+        """Tenant-bound sibling client — same server, same key. Used by the
+        session factory; a session's tenant never changes afterwards."""
+        return PizzaSim(self.base_url, self._api_key, pizzeria_id,
+                        transport=self._transport)
 
     @classmethod
     def from_env(cls) -> "PizzaSim":
