@@ -92,3 +92,32 @@ simplicity: 4
 spec_compliance: 5
 TOTAL: 24/25
 VERDICT: APPROVED
+
+## Round 7 — hotfix (reviews/round7-hotfix.md)
+
+completeness: 4
+correctness: 4
+error_handling: 3
+simplicity: 4
+spec_compliance: 3
+TOTAL: 18/25
+VERDICT: CHANGES_REQUIRED
+
+Context: post-approval production defect — app.js dead over plain HTTP
+(crypto.randomUUID needs a secure context), pizzeria name missing from the
+UI. Finding applied: TTS stays available from cfg.speech; only the mic is
+gated on navigator.mediaDevices + MediaRecorder.
+
+## Round 8 — hotfix (reviews/round8-hotfix.md)
+
+completeness: 5
+correctness: 5
+error_handling: 4
+simplicity: 5
+spec_compliance: 5
+TOTAL: 24/25
+VERDICT: APPROVED
+
+Verified with a real headless Chromium against the public URL
+(isSecureContext=false): no JS errors, greeting, pizzeria name in header,
+typed order question answered, steps visible, speech controls hidden.
