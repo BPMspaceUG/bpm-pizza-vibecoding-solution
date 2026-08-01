@@ -1,3 +1,262 @@
+OpenAI Codex v0.143.0
+--------
+workdir: /home/rob/bpm-pizza-vibecoding-solution
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: none
+session id: 019fbcfc-51b5-71d1-90b2-22be46ead598
+--------
+user
+You are the oracle and devil's advocate for the project specified in SPEC.md (current working directory; read it). The operator wants ONE new capability specified: a returning customer's street can be looked up, so the agent does not ask for the address again. Task: discuss and harden the implementer's proposed SPEC changes BEFORE they are written. Spec text only — no plan, no code will follow yet. The spec must stay self-contained (readable by a fresh developer in an empty repo).
+
+Verified live API fact: GET /pizzerias/{id}/customers (auth X-API-Key) returns customers[] with {id, first_name, street_one, street_two, created_at, deleted_at}; customers are unique per pizzeria by first name.
+
+PROPOSED SPEC CHANGES (attack, improve, or replace):
+1. API contract facts: add the customers endpoint fact above.
+2. Tools table: add a ninth tool `lookup_customer` — parameters {first_name}; returns {known: bool, street_on_file: bool} plus the usual full-state snapshot. Deliberately does NOT return the street text to the model.
+3. Behaviour: when the customer gives a first name, the agent calls lookup_customer; if a street is on file it asks "Soll ich wieder an Ihre gespeicherte Adresse liefern?" WITHOUT reciting the address; on yes, set_customer gains an optional {use_saved_street: true} mode where the CODE copies street_one/street_two from the customer record into the order — the address text never passes through the model or the transcript.
+   Rationale (privacy): first names are the only key; anyone claiming "Ich heiße Marko" would otherwise get Marko's address read aloud in an open web chat. Confirm-without-disclosure keeps the convenience without turning the agent into an address oracle.
+4. Conversation policy: known name + saved street -> one confirmation question; declined or unknown -> ask for the street as today. Lookup failure (API error) is non-fatal: fall back to asking.
+5. Scope In gains "returning customers: saved street reusable after confirmation"; Decisions deferred keeps "the usual" (order memory) deferred — this change covers the address only.
+6. Testing: tool-level tests for lookup (known/unknown/api-error) and for use_saved_street copying in code; one golden transcript variant.
+
+Questions for you:
+a) Is confirm-without-disclosure the right call, or is it overengineered for a demo (the operator's own tests typed the address openly)? Note the operator's instruction is simply "the street must be look-up-able" — decide the privacy stance and be decisive.
+b) Is piggybacking on set_customer (use_saved_street flag) better or worse than lookup_customer returning the street text to the model? Consider "the model never holds data it does not need" vs. tool-contract simplicity.
+c) Any contradictions with existing spec sections (fixed tool table wording, "Persisting customer data" Out-item, ghost-customer warnings, read-back contract — should the read-back show the street when it was code-copied)?
+d) What exact wording/rows would you add or change — keep it minimal, list per section.
+
+Answer decisively in <=40 lines; end with DECISION: a numbered list of the exact spec edits to make.
+
+codex
+I’m reading the project spec and the required skill instructions first, then I’ll pressure-test the proposed change against the existing contract and answer with exact spec wording changes only.
+exec
+/bin/bash -lc "sed -n '1,220p' /home/rob/.agents/skills/using-superpowers/SKILL.md" in /home/rob/bpm-pizza-vibecoding-solution
+exec
+/bin/bash -lc "sed -n '1,260p' /home/rob/.agents/skills/brainstorming/SKILL.md" in /home/rob/bpm-pizza-vibecoding-solution
+exec
+/bin/bash -lc "sed -n '1,260p' SPEC.md" in /home/rob/bpm-pizza-vibecoding-solution
+ succeeded in 119ms:
+---
+name: using-superpowers
+description: Use when starting any conversation - establishes how to find and use skills, requiring skill invocation before ANY response including clarifying questions
+---
+
+<SUBAGENT-STOP>
+If you were dispatched as a subagent to execute a specific task, ignore this skill.
+</SUBAGENT-STOP>
+
+<EXTREMELY-IMPORTANT>
+If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
+
+IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
+
+This is not negotiable. You cannot rationalize your way out of this.
+</EXTREMELY-IMPORTANT>
+
+## The Rule
+
+**Invoke relevant or requested skills BEFORE any response or action** — including clarifying questions, exploring the codebase, or checking files. If it turns out wrong for the situation, you don't have to use it.
+
+**Before entering plan mode:** if you haven't already brainstormed, invoke the brainstorming skill first.
+
+Then announce "Using [skill] to [purpose]" and follow the skill exactly. If it has a checklist, create a todo per item.
+
+## Skill Priority
+
+When multiple skills apply, process skills come first — they set the approach, then implementation skills (frontend-design, etc.) carry it out. Brainstorming and systematic-debugging are Superpowers' most common process skills, but the rule holds for any of them.
+
+- "Let's build X" → superpowers:brainstorming first, then implementation skills.
+- "Fix this bug" → superpowers:systematic-debugging first, then domain skills.
+
+## Red Flags
+
+These thoughts mean STOP—you're rationalizing:
+
+| Thought | Reality |
+|---------|---------|
+| "This is just a simple question" | Questions are tasks. Check for skills. |
+| "I need more context first" | Skill check comes BEFORE clarifying questions. |
+| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first. |
+| "I can check git/files quickly" | Files lack conversation context. Check for skills. |
+| "Let me gather information first" | Skills tell you HOW to gather information. |
+| "This doesn't need a formal skill" | If a skill exists, use it. |
+| "I remember this skill" | Skills evolve. Read current version. |
+| "This doesn't count as a task" | Action = task. Check for skills. |
+| "The skill is overkill" | Simple things become complex. Use it. |
+| "I'll just do this one thing first" | Check BEFORE doing anything. |
+| "This feels productive" | Undisciplined action wastes time. Skills prevent this. |
+| "I know what that means" | Knowing the concept ≠ using the skill. Invoke it. |
+
+## Platform Adaptation
+
+If your harness appears here, read its reference file for special instructions:
+
+- Codex: `references/codex-tools.md`
+- Pi: `references/pi-tools.md`
+- Antigravity: `references/antigravity-tools.md`
+
+## User Instructions
+
+User instructions (CLAUDE.md, AGENTS.md, GEMINI.md, etc, direct requests) take precedence over skills, which in turn override default behavior. Only skip skill workflows or instructions when your human partner has explicitly told you to.
+
+ succeeded in 150ms:
+---
+name: brainstorming
+description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
+---
+
+# Brainstorming Ideas Into Designs
+
+Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
+
+Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design and get user approval.
+
+<HARD-GATE>
+Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
+</HARD-GATE>
+
+## Anti-Pattern: "This Is Too Simple To Need A Design"
+
+Every project goes through this process. A todo list, a single-function utility, a config change — all of them. "Simple" projects are where unexamined assumptions cause the most wasted work. The design can be short (a few sentences for truly simple projects), but you MUST present it and get approval.
+
+## Checklist
+
+You MUST create a task for each of these items and complete them in order:
+
+1. **Explore project context** — check files, docs, recent commits
+2. **Offer the visual companion just-in-time** — NOT upfront. The first time a question would genuinely be clearer shown than described, offer it then (its own message); on approval its browser tab opens for you. If no visual question ever arises, never offer it. See the Visual Companion section below.
+3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
+4. **Propose 2-3 approaches** — with trade-offs and your recommendation
+5. **Present design** — in sections scaled to their complexity, get user approval after each section
+6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
+7. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
+8. **User reviews written spec** — ask user to review the spec file before proceeding
+9. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+
+## Process Flow
+
+```dot
+digraph brainstorming {
+    "Explore project context" [shape=box];
+    "Ask clarifying questions" [shape=box];
+    "Propose 2-3 approaches" [shape=box];
+    "Present design sections" [shape=box];
+    "User approves design?" [shape=diamond];
+    "Write design doc" [shape=box];
+    "Spec self-review\n(fix inline)" [shape=box];
+    "User reviews spec?" [shape=diamond];
+    "Invoke writing-plans skill" [shape=doublecircle];
+
+    "Explore project context" -> "Ask clarifying questions";
+    "Ask clarifying questions" -> "Propose 2-3 approaches";
+    "Propose 2-3 approaches" -> "Present design sections";
+    "Present design sections" -> "User approves design?";
+    "User approves design?" -> "Present design sections" [label="no, revise"];
+    "User approves design?" -> "Write design doc" [label="yes"];
+    "Write design doc" -> "Spec self-review\n(fix inline)";
+    "Spec self-review\n(fix inline)" -> "User reviews spec?";
+    "User reviews spec?" -> "Write design doc" [label="changes requested"];
+    "User reviews spec?" -> "Invoke writing-plans skill" [label="approved"];
+}
+```
+
+**The terminal state is invoking writing-plans.** Do NOT invoke frontend-design, mcp-builder, or any other implementation skill. The ONLY skill you invoke after brainstorming is writing-plans.
+
+## The Process
+
+**Understanding the idea:**
+
+- Check out the current project state first (files, docs, recent commits)
+- Before asking detailed questions, assess scope: if the request describes multiple independent subsystems (e.g., "build a platform with chat, file storage, billing, and analytics"), flag this immediately. Don't spend questions refining details of a project that needs to be decomposed first.
+- If the project is too large for a single spec, help the user decompose into sub-projects: what are the independent pieces, how do they relate, what order should they be built? Then brainstorm the first sub-project through the normal design flow. Each sub-project gets its own spec → plan → implementation cycle.
+- For appropriately-scoped projects, ask questions one at a time to refine the idea
+- Prefer multiple choice questions when possible, but open-ended is fine too
+- Only one question per message - if a topic needs more exploration, break it into multiple questions
+- Focus on understanding: purpose, constraints, success criteria
+
+**Exploring approaches:**
+
+- Propose 2-3 different approaches with trade-offs
+- Present options conversationally with your recommendation and reasoning
+- Lead with your recommended option and explain why
+- YAGNI ruthlessly - remove unnecessary features from every approach and design
+
+**Presenting the design:**
+
+- Once you believe you understand what you're building, present the design
+- Scale each section to its complexity: a few sentences if straightforward, up to 200-300 words if nuanced
+- Ask after each section whether it looks right so far
+- Cover: architecture, components, data flow, error handling, testing
+- Be ready to go back and clarify if something doesn't make sense
+
+**Design for isolation and clarity:**
+
+- Break the system into smaller units that each have one clear purpose, communicate through well-defined interfaces, and can be understood and tested independently
+- For each unit, you should be able to answer: what does it do, how do you use it, and what does it depend on?
+- Can someone understand what a unit does without reading its internals? Can you change the internals without breaking consumers? If not, the boundaries need work.
+- Smaller, well-bounded units are also easier for you to work with - you reason better about code you can hold in context at once, and your edits are more reliable when files are focused. When a file grows large, that's often a signal that it's doing too much.
+
+**Working in existing codebases:**
+
+- Explore the current structure before proposing changes. Follow existing patterns.
+- Where existing code has problems that affect the work (e.g., a file that's grown too large, unclear boundaries, tangled responsibilities), include targeted improvements as part of the design - the way a good developer improves code they're working in.
+- Don't propose unrelated refactoring. Stay focused on what serves the current goal.
+
+## After the Design
+
+**Documentation:**
+
+- Write the validated design (spec) to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
+  - (User preferences for spec location override this default)
+- Use elements-of-style:writing-clearly-and-concisely skill if available
+- Commit the design document to git
+
+**Spec Self-Review:**
+After writing the spec document, look at it with fresh eyes:
+
+1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
+2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
+3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
+4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
+
+Fix any issues inline. No need to re-review — just fix and move on.
+
+**User Review Gate:**
+After the spec review loop passes, ask the user to review the written spec before proceeding:
+
+> "Spec written and committed to `<path>`. Please review it and let me know if you want to make any changes before we start writing out the implementation plan."
+
+Wait for the user's response. If they request changes, make them and re-run the spec review loop. Only proceed once the user approves.
+
+**Implementation:**
+
+- Invoke the writing-plans skill to create a detailed implementation plan
+- Do NOT invoke any other skill. writing-plans is the next step.
+
+## Visual Companion
+
+A browser-based companion for showing mockups, diagrams, and visual options during brainstorming. Available as a tool — not a mode. Accepting the companion means it's available for questions that benefit from visual treatment; it does NOT mean every question goes through the browser.
+
+**Offering the companion (just-in-time):** Do NOT offer it upfront. Wait until a question would genuinely be clearer shown than told — a real mockup / layout / diagram question, not merely a UI *topic*. The first time that happens, offer it then, as its own message:
+> "This next part might be easier if I show you — I can put together mockups, diagrams, and comparisons in a browser tab as we go. It's still new and can be token-intensive. Want me to? I'll open it for you."
+
+**This offer MUST be its own message.** Only the offer — no clarifying question, summary, or other content. Wait for the user's response. If they accept, start the server with `--open` so their browser opens to the first screen automatically. If they decline, continue text-only and don't offer again unless they raise it.
+
+**Per-question decision:** Even after the user accepts, decide FOR EACH QUESTION whether to use the browser or the terminal. The test: **would the user understand this better by seeing it than reading it?**
+
+- **Use the browser** for content that IS visual — mockups, wireframes, layout comparisons, architecture diagrams, side-by-side visual designs
+- **Use the terminal** for content that is text — requirements questions, conceptual choices, tradeoff lists, A/B/C/D text options, scope decisions
+
+A question about a UI topic is not automatically a visual question. "What does personality mean in this context?" is a conceptual question — use the terminal. "Which wizard layout works better?" is a visual question — use the browser.
+
+If they agree to the companion, read the detailed guide before proceeding:
+`skills/brainstorming/visual-companion.md`
+
+ succeeded in 155ms:
 # PizzaSim Ordering Agent — Specification
 
 > Hand this to a coding agent as the entire task:
@@ -125,10 +384,6 @@ the model must deal with in front of the customer.
 - **Several pizzerias.** The customer chooses which one they are ordering
   from, and can change it. `PIZZERIA_ID` is the preselection, not a
   restriction.
-- **Returning customers.** A known first name can reuse its saved street
-  after an explicit confirmation — limited to address reuse via the
-  PizzaSim customer data; broader cross-session memory ("the usual")
-  stays deferred.
 - **Languages:** German and English. The agent answers in the language the
   customer used, per turn, without being told to switch.
 - **Menu, prices, cart, customer, submit.** The full happy path plus
@@ -196,7 +451,6 @@ verified fact never moves back into the open list; the open list only shrinks.
 | `GET /menu` | public | returns `pizzas[]` and `pasta[]`, each with `code` |
 | `GET /pizzerias` | `X-API-Key` | list of pizzerias with `id`, `name` |
 | `GET /pizzerias/{id}/orders` | `X-API-Key` | that pizzeria's orders; used by timeout recovery |
-| `GET /pizzerias/{id}/customers` | `X-API-Key` | customer list — used **only** for address-reuse lookup, never to disclose address text |
 | `POST /pizzerias/{id}/orders` | `X-API-Key` | places the order |
 | `GET /location?street=…` | public | street plausibility check (optional tool) |
 
@@ -259,17 +513,16 @@ Further verified facts (live responses, 2026-07-31/08-01):
   same detail endpoint.
 - **Item codes are unique per type, not globally** — `tonno` exists as a
   pizza and a pasta. Validation and removal always key on `(type, code)`.
-- **The customers endpoint** `GET /pizzerias/{id}/customers` (auth:
-  `X-API-Key`) returns `customers[]` with `{id, first_name, street_one,
-  street_two, created_at, deleted_at}`. Since customers are unique per
-  pizzeria by `first_name`, a first name resolves to at most one saved
-  address. Guardrail: the verified order-write contract proves only
-  `street_one`, so address reuse is limited to `street_one` until
-  `street_two` support on `POST /orders` is verified as well.
 
 ### Open contract questions — shrink-only
 
 Resolve against the live API before the affected component is implemented,
+
+codex
+I have the top half of `SPEC.md`; I’m pulling the tool contract and behavior sections now so I can check for contradictions instead of answering from assumptions.
+exec
+/bin/bash -lc "sed -n '261,520p' SPEC.md" in /home/rob/bpm-pizza-vibecoding-solution
+ succeeded in 0ms:
 then move the answer up into the facts and delete the question. Never guess.
 A verified fact never returns here.
 
@@ -317,9 +570,8 @@ The model sees exactly these. Names, parameters and semantics are fixed.
 | `get_menu` | — | pizzas and pasta with codes, display names, prices |
 | `add_items` | `items[]` of `{type, code, qty, extras[]}` | new basket + revision |
 | `remove_item` | `code`, `type`, optional `qty` | new basket + revision |
-| `lookup_customer` | `first_name` | `{customer_exists, saved_street_available}` — booleans only, **no street text** |
-| `set_customer` | `first_name`, plus either `street_one` **or** `use_saved_street: true` (mutually exclusive) — with the flag, the **code** copies the saved street into the order; the text never passes through the model | customer as stored (saved street as a flag, not text) |
-| `read_back` | — | basket, customer name, revision, and the code-computed basket total — the text the agent reads out. A street reused from saved data is **not** recited; the earlier yes/no reuse confirmation covers it |
+| `set_customer` | `first_name`, optional `street_one` | customer as stored |
+| `read_back` | — | basket, customer, revision, and the code-computed basket total — the text the agent reads out |
 | `confirm_order` | `revision` | state `CONFIRMED`, or error if stale |
 | `submit_order` | — | `order_id`, `status`, `eta_seconds` |
 | `check_street` | `street` | plausibility result (optional) |
@@ -341,14 +593,6 @@ Tool result conventions:
   `(type, code)` with different `extras[]`, the semantics are
   deterministic: without `qty` every matching line is removed; with `qty`
   the most recently added matching line is reduced.
-- **Saved-street redaction.** A street reused from saved customer data
-  never appears in tool results, streamed intermediate steps, transcripts
-  or the structured logs — only booleans and state flags (e.g.
-  `street_on_file: true`) may appear there, and the web UI shows it as
-  "saved address", never as text. A street the customer dictated in this
-  conversation may be echoed as before — it is their own input. First
-  names are the only lookup key, so anyone claiming a name must never be
-  able to extract the address behind it.
 
 ---
 
@@ -372,13 +616,8 @@ The CLI has no switch and stays at `PIZZERIA_LANG`.
 - Never state a menu item or a price that did not come from `get_menu` in this
   session. Price questions are normal questions, and so is "what does my
   basket come to?"
-- Collect the first name; then call `lookup_customer`. If a saved street
-  exists, ask exactly one confirmation question ("Soll ich wieder an Ihre
-  gespeicherte Adresse liefern?") **without reciting the address**; on yes,
-  `set_customer(use_saved_street: true)`. If the customer declines, is
-  unknown, or the lookup fails (non-fatal), ask for the street as usual.
-  If the customer declines the street entirely, accept it — it is optional
-  in the API.
+- Collect first name and street. If the customer declines the street, accept
+  it — it is optional in the API.
 - Before submitting: call `read_back`, present it, and wait for an explicit
   yes. "Mhm" and silence are not a yes; ask once more, then offer to start
   over.
@@ -545,6 +784,132 @@ list or detail lookup fails, tell the customer honestly.
 Each of these was present in a previous implementation. None is a matter of
 taste.
 
+exec
+/bin/bash -lc "sed -n '1,220p' /home/rob/.agents/skills/using-superpowers/references/codex-tools.md" in /home/rob/bpm-pizza-vibecoding-solution
+ succeeded in 0ms:
+## Subagent dispatch requires multi-agent support
+
+Add to your Codex config (`~/.codex/config.toml`):
+
+```toml
+[features]
+multi_agent = true
+```
+
+This enables `spawn_agent`, `wait_agent`, and `close_agent` for skills like `dispatching-parallel-agents` and `subagent-driven-development`. When using subagent-driven-development, close reviewer subagents when their review returns. Keep each implementer subagent open until its task's review passes — the fix loop resumes the implementer — then close it. If your harness cannot send another message to a spawned agent, dispatch each fix round as a fresh implementer carrying the brief, the report file, and the findings.
+
+## Environment Detection
+
+Skills that create worktrees or finish branches should detect their
+environment with read-only git commands before proceeding:
+
+```bash
+GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
+GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
+BRANCH=$(git branch --show-current)
+```
+
+- `GIT_DIR != GIT_COMMON` → already in a linked worktree (skip creation)
+- `BRANCH` empty → detached HEAD (cannot branch/push/PR from sandbox)
+
+See `using-git-worktrees` Step 0 and `finishing-a-development-branch`
+Step 1 for how each skill uses these signals.
+
+## Codex App Finishing
+
+When the sandbox blocks branch/push operations (detached HEAD in an
+externally managed worktree), the agent commits all work and informs
+the user to use the App's native controls:
+
+- **"Create branch"** — names the branch, then commit/push/PR via App UI
+- **"Hand off to local"** — transfers work to the user's local checkout
+
+The agent can still run tests, stage files, and output suggested branch
+names, commit messages, and PR descriptions for the user to copy.
+
+codex
+I’ve got the relevant contract and policy sections. I’m checking the rest for references to customer persistence, read-back wording, and any tool-table language that would make the proposal internally inconsistent.
+exec
+/bin/bash -lc 'rg -n "Persisting customer data|ghost|read-back|read_back|set_customer|tool|customer data|street_one|street_two|customer" SPEC.md' in /home/rob/bpm-pizza-vibecoding-solution
+ succeeded in 0ms:
+39:**A customer talks to the agent, and the resulting order appears in the API
+40:under the pizzeria they chose — with the right customer, the right items, the
+48:3. The customer name is the one the customer gave.
+59:- The order landed under a **different pizzeria** than the one the customer
+62:- A misheard or mistyped name created a **new customer** instead of matching
+64:- The order was submitted **without the customer confirming** the read-back.
+67:on blind retries, the name read-back, the tenant in the URL path — exists to
+81:noisy room, when the customer changes their mind.
+86:and never reaches the kitchen without a confirmed read-back.
+97:- The model cannot write to it directly. It calls tools that request a
+100:  tool error carrying candidate matches — never a silent guess, never a
+103:  `CONFIRMED`. The only way into `CONFIRMED` is a read-back the customer
+109:model misbehaves, the state machine refuses — and the refusal is a tool result
+110:the model must deal with in front of the customer.
+121:    agent's intermediate steps as newline-delimited JSON so tool calls and
+122:    tool results are visible, not just the final answer.
+125:- **Several pizzerias.** The customer chooses which one they are ordering
+129:  customer used, per turn, without being told to switch.
+130:- **Menu, prices, cart, customer, submit.** The full happy path plus
+131:  correction ("no, make that three"), removal, and abandonment. The customer
+136:- **Structured logging** of every turn: user text, model tool calls, tool
+148:- Persisting customer data anywhere beyond the process and the PizzaSim API.
+166:| `PIZZERIA_LANG` | Initial language, `de` or `en`: the greeting, the CLI, and the web UI before the customer switches |
+196:| `GET /location?street=…` | public | street plausibility check (optional tool) |
+202:  "customer": { "first_name": "Marco", "street_one": "via di Cantieri" },
+220:  silently creates a new customer — a misheard name creates a ghost. Speech
+222:- `street_one` is optional and **not** validated for deliverability. Asking
+236:  (`"items[0].extras contains invalid topping 'unicorn_dust'"`); the tool
+247:  customer an address was verified.
+250:  full order incl. `customer` and `items[]`. Submit-timeout recovery
+272:EMPTY ──add_items──▶ COLLECTING ──set_customer──▶ READY
+275:                                                    │ read_back + customer says yes
+289:   after `read_back` for the current basket revision. The basket carries a
+308:| `set_customer` | `first_name`, optional `street_one` | customer as stored |
+309:| `read_back` | — | basket, customer, revision, and the code-computed basket total — the text the agent reads out |
+319:  `message` is written so it can be spoken to the customer as-is.
+322:- Quantities are integers. A tool receiving `"zwei"` returns
+326:  web basket shows the same code-owned total that `read_back` carries.
+347:customer's latest message, even when that differs from the session language.
+354:- Collect first name and street. If the customer declines the street, accept
+356:- Before submitting: call `read_back`, present it, and wait for an explicit
+377:Type or paste a message, get an answer. The exchange a first-time customer
+381:> those and a pasta* → *I'm a new customer, my name is …* → read-back →
+421:- Intermediate steps render as they stream — which tool was called and what it
+422:  returned — visually distinct from the assistant's words. A stream whose tool
+423:  events the page discards is a defect: the customer sees a frozen screen
+428:- Errors in the customer's language, in plain words. No status codes, no
+434:  code owns the order; the customer must see what the code holds.
+435:- The read-back is visually distinct and carries an explicit confirm control.
+436:  Confirmation is an action the customer takes, not a word the agent claims to
+464:  vendor and sent customer audio to a third party. The self-hosted service
+474:- **Push-to-talk.** The microphone starts and stops on the customer's action,
+476:- **Synthesis is optional and off by default**, toggled by the customer,
+482:  tools, same state machine. When a reply will be spoken: at most three menu
+485:  failure: a misheard name silently creates a customer nobody will find
+513:list or detail lookup fails, tell the customer honestly.
+524:   matches, and makes the tool-calling architecture decorative.
+537:   the final message and threw tool events away — the customer watched a
+549:  replaying fixed tool calls — happy path, correction, unknown item, customer
+550:  changes mind after read-back, submit timeout. Assert final state and the
+556:  customer never talks to `curl`. Include three failure paths: a tool error, a
+561:  orders back — presence via `GET /pizzerias/{id}/orders`, customer, items
+584:deliberately left out of this spec: tools are replaced long before the product
+585:is. The roles and the protocol are binding; the tooling is not.
+603:  customer: `LITELLM_PIZZA_MODEL_1` and `_2` from the environment.
+648:1. **PLAN.** Write `PLAN.md`: file layout, tool schemas, state machine, agent
+669:1. **Core.** Order model, state machine, tool layer, tests. No LLM, no
+671:2. **Agent loop.** Model, tools, system prompt, one turn end to end.
+699:│   ├── tools.py             ← tool schemas + dispatch
+712:│   ├── test_tools.py
+739:| Confirmation | Mandatory read-back tied to a basket revision |
+743:| Errors | Typed in code, plain language to the customer |
+748:| Build tooling | Not specified here; the operator picks it |
+
+exec
+/bin/bash -lc "sed -n '521,820p' SPEC.md" in /home/rob/bpm-pizza-vibecoding-solution
+ succeeded in 0ms:
+
 1. **A regex "fast path" that places an order without the model.** It bypasses
    confirmation, mis-parses quantities, duplicates items on overlapping
    matches, and makes the tool-calling architecture decorative.
@@ -571,15 +936,10 @@ taste.
 - **Unit:** the state machine, exhaustively. Every illegal transition has a
   test asserting it is refused.
 - **Tool level:** against recorded API fixtures. No network, no LLM, fast.
-- **Golden transcripts:** scripted conversations against a stub model
+- **Golden transcripts:** five scripted conversations against a stub model
   replaying fixed tool calls — happy path, correction, unknown item, customer
-  changes mind after read-back, submit timeout, saved-address reuse, and a
-  decline/fallback variant. Assert final state and the calls actually made.
-- **Address reuse:** tool-level tests for `lookup_customer`
-  (known/unknown/API error — the error is non-fatal) and for
-  `set_customer(use_saved_street: true)` copying in code; redaction tests
-  asserting no saved street text appears in tool results, streamed events,
-  transcripts or logs.
+  changes mind after read-back, submit timeout. Assert final state and the
+  calls actually made.
 - **Browser end-to-end, not optional.** At least one test drives the real
   page in a headless browser — types a message, waits for a rendered reply,
   walks a full order to submission — asserting against the DOM, not the API.
@@ -760,7 +1120,6 @@ a full pass over the spec finds nothing left that you know how to improve.
 | Pizzeria selector | Filled from the API only; no fallback entry |
 | Prices | Shown from the API; no payment, no invented figures |
 | Totals | Computed in code from API prices; the model never does arithmetic |
-| Saved addresses | Reusable after one explicit confirmation; the address text never reaches the model, the stream, the transcript or the logs |
 | Language | Session language from `PIZZERIA_LANG`, switchable in the web header; per-turn mirroring wins for replies |
 | Transports | One core, two channels (CLI, web), no logic in the channels |
 | Speech | Self-hosted container, OpenAI-compatible HTTP; no vendor, no browser speech API |
@@ -799,3 +1158,45 @@ a full pass over the spec finds nothing left that you know how to improve.
 - Every ticket carries acceptance criteria as a checklist.
 - Tests belong to the ticket that introduces the behaviour, never to a
   follow-up.
+
+codex
+`confirm-without-disclosure` is the right call. Keep it. This is not overengineering: the spec already treats misheard names and premature submission as product-failing bugs, and first-name-only identity makes address disclosure materially unsafe even in a demo. The convenience requirement is “look-up-able”, not “readable aloud”.
+
+Piggybacking on `set_customer` is also the right architecture. `lookup_customer` should answer only whether a reusable address exists; `set_customer(use_saved_street: true)` should do the copy in code. That preserves least-privilege, keeps the model out of unnecessary PII, and avoids putting street text into prompts, transcripts, or streamed tool events.
+
+Main hardening points:
+- Do not spec copying `street_two` into submitted orders unless `POST /pizzerias/{id}/orders` accepting `street_two` is also verified. Today the verified request-body fact only proves `street_one`.
+- The current “tool results are visible” and “structured logging of tool results” sections would leak the address unless you explicitly redact it. Fix that.
+- The current `read_back` contract says it returns “the text the agent reads out”. That conflicts with “address never passes through the model”. Change `read_back` so saved streets are confirmed by a separate yes/no question, not recited.
+- “Collect first name and street” is no longer universally true. It becomes “collect first name; collect street unless a saved street is confirmed for reuse”.
+
+DECISION:
+1. **PizzaSim API (contract):** add `GET /pizzerias/{id}/customers` with `X-API-Key`, returning `customers[]` with `id, first_name, street_one, street_two, created_at, deleted_at`; note uniqueness is per pizzeria by `first_name`; add “use this only for address-reuse lookup, never to disclose address text”.
+2. **Tools table:** add `lookup_customer(first_name)` → `{customer_exists: bool, saved_street_available: bool}` plus full state snapshot **without any street fields**. Change `set_customer` to `first_name` plus either `street_one` or `use_saved_street: true` (mutually exclusive). Do not mention `street_two` unless submit support is verified.
+3. **Tool result conventions / logging / streamed steps:** add that customer street data is never returned to the model, never shown in streamed tool results, and never written to structured logs or transcripts; only booleans and state flags may appear.
+4. **Conversation policy:** replace “Collect first name and street” with “Collect first name; if `lookup_customer` says a saved street exists, ask one confirmation question: ‘Soll ich wieder an Ihre gespeicherte Adresse liefern?’; if yes, call `set_customer(use_saved_street: true)`; if no, unknown, or lookup fails, ask for the street as usual.”
+5. **Read-back contract:** change `read_back` wording so it reads back items, quantities, customer name, and total. If the street was reused from saved data, the address is not recited; the earlier yes/no reuse confirmation satisfies address confirmation.
+6. **Scope / deferred decisions:** add to Scope In “returning customers can reuse a saved street after confirmation”; keep broader cross-session memory deferred, but state explicitly that this feature is limited to address reuse via PizzaSim customer data.
+7. **Testing:** add tool-level tests for `lookup_customer` known/unknown/error, redaction tests ensuring no street appears in tool results/logs/stream events, `set_customer(use_saved_street: true)` copying behavior, and one golden transcript for saved-address reuse plus one decline/fallback variant.
+8. **Guardrail note:** unless and until the orders write contract verifies `street_two`, the spec must limit reuse to `street_one` only.
+tokens used
+22,631
+`confirm-without-disclosure` is the right call. Keep it. This is not overengineering: the spec already treats misheard names and premature submission as product-failing bugs, and first-name-only identity makes address disclosure materially unsafe even in a demo. The convenience requirement is “look-up-able”, not “readable aloud”.
+
+Piggybacking on `set_customer` is also the right architecture. `lookup_customer` should answer only whether a reusable address exists; `set_customer(use_saved_street: true)` should do the copy in code. That preserves least-privilege, keeps the model out of unnecessary PII, and avoids putting street text into prompts, transcripts, or streamed tool events.
+
+Main hardening points:
+- Do not spec copying `street_two` into submitted orders unless `POST /pizzerias/{id}/orders` accepting `street_two` is also verified. Today the verified request-body fact only proves `street_one`.
+- The current “tool results are visible” and “structured logging of tool results” sections would leak the address unless you explicitly redact it. Fix that.
+- The current `read_back` contract says it returns “the text the agent reads out”. That conflicts with “address never passes through the model”. Change `read_back` so saved streets are confirmed by a separate yes/no question, not recited.
+- “Collect first name and street” is no longer universally true. It becomes “collect first name; collect street unless a saved street is confirmed for reuse”.
+
+DECISION:
+1. **PizzaSim API (contract):** add `GET /pizzerias/{id}/customers` with `X-API-Key`, returning `customers[]` with `id, first_name, street_one, street_two, created_at, deleted_at`; note uniqueness is per pizzeria by `first_name`; add “use this only for address-reuse lookup, never to disclose address text”.
+2. **Tools table:** add `lookup_customer(first_name)` → `{customer_exists: bool, saved_street_available: bool}` plus full state snapshot **without any street fields**. Change `set_customer` to `first_name` plus either `street_one` or `use_saved_street: true` (mutually exclusive). Do not mention `street_two` unless submit support is verified.
+3. **Tool result conventions / logging / streamed steps:** add that customer street data is never returned to the model, never shown in streamed tool results, and never written to structured logs or transcripts; only booleans and state flags may appear.
+4. **Conversation policy:** replace “Collect first name and street” with “Collect first name; if `lookup_customer` says a saved street exists, ask one confirmation question: ‘Soll ich wieder an Ihre gespeicherte Adresse liefern?’; if yes, call `set_customer(use_saved_street: true)`; if no, unknown, or lookup fails, ask for the street as usual.”
+5. **Read-back contract:** change `read_back` wording so it reads back items, quantities, customer name, and total. If the street was reused from saved data, the address is not recited; the earlier yes/no reuse confirmation satisfies address confirmation.
+6. **Scope / deferred decisions:** add to Scope In “returning customers can reuse a saved street after confirmation”; keep broader cross-session memory deferred, but state explicitly that this feature is limited to address reuse via PizzaSim customer data.
+7. **Testing:** add tool-level tests for `lookup_customer` known/unknown/error, redaction tests ensuring no street appears in tool results/logs/stream events, `set_customer(use_saved_street: true)` copying behavior, and one golden transcript for saved-address reuse plus one decline/fallback variant.
+8. **Guardrail note:** unless and until the orders write contract verifies `street_two`, the spec must limit reuse to `street_one` only.

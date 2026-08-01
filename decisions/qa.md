@@ -37,3 +37,18 @@ grill of the retrofit position and answers (reviews/round10-grill-verdict.md).
    start over, switch-race abandonment via fresh session ids).
 5. Prices/totals canonical in core only, copied at add time, unit-tested +
    Playwright E2E incl. tenant switch and the three failure paths.
+
+## 2026-08-01 — Street lookup for returning customers (SPEC change only)
+
+**Q:** Operator: saved streets must be look-up-able. Discussed proposed
+spec changes with Codex (reviews/round20-street-spec-discussion.md).
+
+**A (decision):** Confirm-without-disclosure + code-side copy. New tool
+`lookup_customer(first_name)` returns booleans only; `set_customer` gains
+`use_saved_street: true` (mutually exclusive with `street_one`) and the
+code copies the saved street — the text never reaches the model, stream,
+transcript or logs (scoped: a street the customer dictated themselves may
+be echoed). read_back does not recite reused streets. Reuse limited to
+street_one until street_two on POST /orders is verified. SPEC.md updated
+in 8 places per the Codex decision list; previous spec archived as
+SPEC_20260801_3.md. No plan, no implementation yet (operator hold).
