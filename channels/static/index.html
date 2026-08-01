@@ -8,21 +8,47 @@
 </head>
 <body>
 <header>
-  <h1 id="title">Pizza bestellen</h1>
-  <label id="tts-wrap" hidden>
-    <input type="checkbox" id="tts-toggle"> Antworten vorlesen
-  </label>
+  <h1 id="pizzeria-name">…</h1>
+  <div class="controls">
+    <select id="pizzeria-select" hidden aria-label="Pizzeria"></select>
+    <span id="list-unavailable" class="muted" hidden></span>
+    <a id="dashboard-link" target="_blank" rel="noopener" hidden>Dashboard</a>
+    <span id="lang-switch" role="group" aria-label="Sprache">
+      <button type="button" data-lang="de">DE</button><button
+        type="button" data-lang="en">EN</button>
+    </span>
+    <button type="button" id="start-over"></button>
+  </div>
 </header>
 
-<main id="chat" aria-live="polite"></main>
+<div id="layout">
+  <main id="chat" aria-live="polite"></main>
+  <aside id="basket">
+    <h2 id="basket-title"></h2>
+    <ul id="basket-lines"></ul>
+    <div id="basket-extras-note" class="muted" hidden></div>
+    <div id="basket-total"></div>
+    <div id="submitted-banner" hidden></div>
+  </aside>
+</div>
 
 <form id="composer">
   <button type="button" id="mic" hidden aria-pressed="false"
-          title="Push-to-talk: Klick startet, Klick stoppt">🎤</button>
-  <input id="text" autocomplete="off"
-         placeholder="Nachricht schreiben …" autofocus>
+          title="Push-to-talk">🎤</button>
+  <input id="text" autocomplete="off" autofocus>
   <button type="submit" id="send">Senden</button>
+  <label id="tts-wrap" hidden>
+    <input type="checkbox" id="tts-toggle"> <span id="tts-label"></span>
+  </label>
 </form>
+
+<footer>
+  <span id="version"></span>
+  <code id="uuid" title="Pizzeria UUID"></code>
+  <span class="badge" id="health-api">API</span>
+  <span class="badge" id="health-gateway">Gateway</span>
+  <a id="docs-link" target="_blank" rel="noopener">API Docs</a>
+</footer>
 
 <script src="/static/app.js"></script>
 </body>

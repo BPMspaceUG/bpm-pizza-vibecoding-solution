@@ -1,24 +1,87 @@
-/* Web chat over the NDJSON stream. Speech is push-to-talk via
-   MediaRecorder + the server's speech proxy — no browser speech APIs. */
+/* Web UI over the NDJSON stream. The invariant this file serves: no sent
+   message ends without a rendered assistant reply or a rendered error.
+   Speech: browser captures/plays audio only (MediaRecorder + <audio>);
+   recognition/synthesis happen server-side. No browser speech APIs. */
 "use strict";
 
-const chat = document.getElementById("chat");
-const form = document.getElementById("composer");
-const input = document.getElementById("text");
-const send = document.getElementById("send");
-const mic = document.getElementById("mic");
-const ttsWrap = document.getElementById("tts-wrap");
-const ttsToggle = document.getElementById("tts-toggle");
+const $ = (id) => document.getElementById(id);
+const chat = $("chat");
 
-// crypto.randomUUID needs a secure context (HTTPS/localhost); the demo may
-// be served over plain HTTP, so fall back to getRandomValues.
-const sessionId = crypto.randomUUID
-  ? crypto.randomUUID()
-  : Array.from(crypto.getRandomValues(new Uint8Array(16)),
-               (b) => b.toString(16).padStart(2, "0")).join("");
-let speechEnabled = false;
+const I18N = {
+  de: {
+    working: "Der Agent arbeitet …",
+    steps: "Zwischenschritte",
+    notAnswered: "Der Agent hat nicht geantwortet.",
+    errNetwork: "Verbindung fehlgeschlagen.",
+    errTimeout: "Zeitüberschreitung.",
+    errHttp: "Es gab einen technischen Fehler.",
+    busy: "Es läuft gerade eine Antwort — einen Moment.",
+    resend: "Erneut senden",
+    listUnavailable: "Pizzeria-Liste nicht verfügbar",
+    startOver: "Neu beginnen",
+    basket: "Warenkorb",
+    total: "Summe",
+    extrasNote: "Extras sind nicht separat bepreist.",
+    submitted: "Bestellung abgeschickt — Nummer:",
+    confirm: "Bestellung bestätigen",
+    placeholder: "Nachricht schreiben …",
+    send: "Senden",
+    ttsLabel: "Antworten vorlesen",
+    sttFail: "Spracherkennung gerade nicht erreichbar — bitte tippen.",
+    sttEmpty: "Ich habe nichts verstanden — bitte noch einmal.",
+    ttsFail: "Vorlesen gerade nicht möglich.",
+    micDenied: "Kein Mikrofonzugriff.",
+    sessionGone: "Diese Pizzeria ist gerade nicht verfügbar.",
+  },
+  en: {
+    working: "The agent is working …",
+    steps: "Intermediate steps",
+    notAnswered: "The agent did not answer.",
+    errNetwork: "Connection failed.",
+    errTimeout: "The request timed out.",
+    errHttp: "A technical error occurred.",
+    busy: "A reply is already in progress — one moment.",
+    resend: "Resend",
+    listUnavailable: "Pizzeria list unavailable",
+    startOver: "Start over",
+    basket: "Basket",
+    total: "Total",
+    extrasNote: "Extras are not separately priced.",
+    submitted: "Order submitted — number:",
+    confirm: "Confirm order",
+    placeholder: "Type a message …",
+    send: "Send",
+    ttsLabel: "Read replies aloud",
+    sttFail: "Speech recognition unavailable — please type.",
+    sttEmpty: "I didn't catch that — please try again.",
+    ttsFail: "Read-aloud is unavailable right now.",
+    micDenied: "No microphone access.",
+    sessionGone: "That pizzeria isn't available right now.",
+  },
+};
 
-function add(cls, text) {
+let cfg = null;
+let session = null;          // {id, pizzeriaId, pizzeriaName}
+let lang = "de";
+let currentAbort = null;
+let lastOrderId = null;
+const t = (key) => I18N[lang][key];
+
+/* ---------- chrome ------------------------------------------------------ */
+
+function applyChrome() {
+  document.documentElement.lang = lang;
+  $("text").placeholder = t("placeholder");
+  $("send").textContent = t("send");
+  $("start-over").textContent = t("startOver");
+  $("basket-title").textContent = t("basket");
+  $("tts-label").textContent = t("ttsLabel");
+  $("list-unavailable").textContent = t("listUnavailable");
+  document.querySelectorAll("#lang-switch button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.lang === lang));
+}
+
+function addMsg(cls, text) {
   const div = document.createElement("div");
   div.className = "msg " + cls;
   div.textContent = text;
@@ -27,77 +90,246 @@ function add(cls, text) {
   return div;
 }
 
-function notice(text) {
+function notice(text, resendText) {
   const div = document.createElement("div");
   div.className = "notice";
-  div.textContent = text;
+  div.appendChild(document.createTextNode(text));
+  if (resendText !== undefined) {
+    const btn = document.createElement("button");
+    btn.textContent = t("resend");
+    btn.onclick = () => { div.remove(); sendTurn(resendText); };
+    div.appendChild(btn);
+  }
   chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
 }
 
-function stepsBlock() {
-  const details = document.createElement("details");
-  details.className = "steps";
-  details.innerHTML = "<summary>Zwischenschritte</summary>";
-  chat.appendChild(details);
-  return details;
+/* ---------- basket ------------------------------------------------------ */
+
+function euro(n) {
+  return n.toFixed(2).replace(".", lang === "de" ? "," : ".") + " €";
 }
 
-async function turn(text) {
-  send.disabled = true;
-  if (text !== null) add("user", text);
-  const steps = stepsBlock();
+function renderBasket(snapshot) {
+  const lines = $("basket-lines");
+  lines.textContent = "";
+  let hasExtras = false;
+  for (const item of snapshot.items) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${item.qty}× ${item.name}` +
+      (item.extras.length ? ` (+${item.extras.join(", ")})` : "");
+    if (item.extras.length) hasExtras = true;
+    const price = document.createElement("span");
+    price.textContent = euro(item.line_total);
+    li.append(label, price);
+    lines.appendChild(li);
+  }
+  $("basket-extras-note").hidden = !hasExtras;
+  $("basket-extras-note").textContent = t("extrasNote");
+  $("basket-total").textContent = "";
+  const totalLabel = document.createElement("span");
+  totalLabel.textContent = t("total");
+  const totalValue = document.createElement("span");
+  totalValue.textContent = euro(snapshot.basket_total);
+  $("basket-total").append(totalLabel, totalValue);
+
+  const submitted = snapshot.state === "SUBMITTED";
+  $("basket").classList.toggle("locked", submitted);
+  $("submitted-banner").hidden = !submitted;
+  if (submitted) {
+    $("submitted-banner").textContent =
+      `${t("submitted")} ${lastOrderId || "—"}`;
+    disableConfirm();
+  }
+}
+
+/* ---------- read-back + confirm ---------------------------------------- */
+
+function disableConfirm() {
+  document.querySelectorAll(".readback button").forEach((b) => {
+    b.disabled = true;
+  });
+}
+
+function showReadback(snapshot) {
+  disableConfirm();
+  const panel = document.createElement("div");
+  panel.className = "readback";
+  const list = snapshot.items
+    .map((i) => `${i.qty}× ${i.name} — ${euro(i.line_total)}`)
+    .join("\n");
+  const who = snapshot.customer
+    ? `${snapshot.customer.first_name}` +
+      (snapshot.customer.street_one
+        ? `, ${snapshot.customer.street_one}` : "")
+    : "";
+  panel.textContent =
+    `${who}\n${list}\n${t("total")}: ${euro(snapshot.basket_total)}`;
+  const btn = document.createElement("button");
+  btn.textContent = t("confirm");
+  btn.onclick = () => { btn.disabled = true; confirmOrder(snapshot.revision); };
+  panel.appendChild(btn);
+  chat.appendChild(panel);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+/* ---------- streaming --------------------------------------------------- */
+
+async function readStream(response, resendText) {
+  const steps = document.createElement("details");
+  steps.className = "steps";
+  steps.innerHTML = `<summary>${t("steps")}</summary>`;
+  chat.appendChild(steps);
+
+  let assistantAnswered = false;
   let finalText = "";
-  try {
-    const res = await fetch("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, text }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let nl;
-      while ((nl = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, nl); buffer = buffer.slice(nl + 1);
-        if (!line.trim()) continue;
-        const ev = JSON.parse(line);
-        if (ev.type === "tool_call" || ev.type === "tool_result") {
-          const pre = document.createElement("pre");
-          pre.textContent = (ev.type === "tool_call" ? "→ " : "← ")
-            + (ev.tool || "") + " "
-            + JSON.stringify(ev.args ?? ev.result);
-          steps.appendChild(pre);
-        } else if (ev.type === "assistant") {
-          finalText = ev.text;
-          add("assistant", ev.text);
-        } else if (ev.type === "error") {
-          notice("Es gab einen technischen Fehler.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl); buffer = buffer.slice(nl + 1);
+      if (!line.trim()) continue;
+      const ev = JSON.parse(line);
+      if (ev.type === "tool_call" || ev.type === "tool_result") {
+        const pre = document.createElement("pre");
+        pre.textContent = (ev.type === "tool_call" ? "→ " : "← ")
+          + (ev.tool || "") + " " + JSON.stringify(ev.args ?? ev.result);
+        steps.appendChild(pre);
+        if (ev.type === "tool_result" && !ev.result.error) {
+          if (ev.result.order_id) lastOrderId = ev.result.order_id;
+          if (ev.result.snapshot) {
+            renderBasket(ev.result.snapshot);
+            if (ev.tool === "read_back") showReadback(ev.result.snapshot);
+          }
         }
+      } else if (ev.type === "assistant") {
+        if (ev.text && ev.text.trim()) {
+          assistantAnswered = true;
+          finalText = ev.text;
+          addMsg("assistant", ev.text);
+        }
+      } else if (ev.type === "done") {
+        renderBasket(ev.state);
       }
     }
-  } catch (err) {
-    notice("Verbindung fehlgeschlagen — bitte noch einmal versuchen.");
   }
   if (!steps.querySelector("pre")) steps.remove();
-  send.disabled = false;
-  input.focus();
-  if (finalText && speechEnabled && ttsToggle.checked) speak(finalText);
+  if (!assistantAnswered) notice(t("notAnswered"), resendText);
+  return finalText;
 }
 
-form.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = "";
-  turn(text);
-});
+async function streamPost(path, body, resendText) {
+  currentAbort = new AbortController();
+  const working = document.createElement("div");
+  working.className = "working";
+  working.textContent = t("working");
+  chat.appendChild(working);
+  $("send").disabled = true;
+  let finalText = "";
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: currentAbort.signal,
+    });
+    if (res.status === 404) { await startSession(session.pizzeriaId); return ""; }
+    if (res.status === 409) { working.remove(); notice(t("busy")); return ""; }
+    if (!res.ok) throw new Error("http");
+    working.remove();
+    finalText = await readStream(res, resendText);
+  } catch (err) {
+    working.remove();
+    if (err.name === "AbortError") { /* deliberate: switch/start-over */ }
+    else if (err.name === "TimeoutError") notice(t("errTimeout"), resendText);
+    else if (err.message === "http") notice(t("errHttp"), resendText);
+    else notice(t("errNetwork"), resendText);
+  }
+  $("send").disabled = false;
+  $("text").focus();
+  return finalText;
+}
 
-/* --- speech: push-to-talk, server-proxied ------------------------------ */
+async function sendTurn(text, spoken = false) {
+  if (text !== null) addMsg("user", text);
+  const finalText = await streamPost(
+    "/chat", { session_id: session.id, text, spoken }, text ?? undefined);
+  if (finalText && cfg.speech && $("tts-toggle").checked) speak(finalText);
+}
+
+async function confirmOrder(revision) {
+  const finalText = await streamPost(
+    "/confirm", { session_id: session.id, revision });
+  if (finalText && cfg.speech && $("tts-toggle").checked) speak(finalText);
+}
+
+/* ---------- sessions / tenancy ----------------------------------------- */
+
+function fillSelector() {
+  const select = $("pizzeria-select");
+  if (!cfg.pizzerias) {
+    select.hidden = true;
+    $("list-unavailable").hidden = false;
+    return;
+  }
+  select.hidden = false;
+  $("list-unavailable").hidden = true;
+  select.textContent = "";
+  for (const p of cfg.pizzerias) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = `${p.name} (${p.id.slice(0, 8)})`;
+    select.appendChild(opt);
+  }
+  if (session) select.value = session.pizzeriaId;
+}
+
+async function refreshConfig() {
+  cfg = await (await fetch("/config")).json();
+  $("version").textContent = "v" + cfg.version;
+  $("docs-link").href = cfg.docs_url;
+  fillSelector();
+  const speechUsable = cfg.speech;
+  $("tts-wrap").hidden = !speechUsable;
+  $("mic").hidden = !(speechUsable && navigator.mediaDevices &&
+                      window.MediaRecorder);
+}
+
+async function startSession(pizzeriaId) {
+  if (currentAbort) currentAbort.abort();
+  chat.textContent = "";
+  lastOrderId = null;
+  renderBasket({ items: [], basket_total: 0, state: "EMPTY",
+                 customer: null });
+  const res = await fetch("/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pizzeria_id: pizzeriaId, lang }),
+  });
+  if (!res.ok) {
+    notice(t("sessionGone"));
+    await refreshConfig();  // fresh selector from the live list
+    return;
+  }
+  const data = await res.json();
+  session = { id: data.session_id, pizzeriaId: data.pizzeria_id,
+              pizzeriaName: data.pizzeria_name };
+  $("pizzeria-name").textContent = data.pizzeria_name;
+  document.title = data.pizzeria_name;
+  $("dashboard-link").hidden = false;
+  $("dashboard-link").href = `${cfg.dashboard_base}/${data.pizzeria_id}`;
+  $("uuid").textContent = data.pizzeria_id;
+  $("pizzeria-select").value = data.pizzeria_id;
+  await sendTurn(null);  // the agent greets first
+}
+
+/* ---------- speech (capture/playback only) ------------------------------ */
 
 let recorder = null;
 
@@ -107,30 +339,31 @@ async function startRecording() {
   const chunks = [];
   recorder.ondataavailable = (e) => chunks.push(e.data);
   recorder.onstop = async () => {
-    stream.getTracks().forEach((t) => t.stop());
-    mic.classList.remove("recording");
-    mic.setAttribute("aria-pressed", "false");
+    stream.getTracks().forEach((tr) => tr.stop());
+    $("mic").classList.remove("recording");
+    $("mic").setAttribute("aria-pressed", "false");
     const blob = new Blob(chunks, { type: recorder.mimeType });
     const body = new FormData();
     body.append("audio", blob, "speech.webm");
     try {
-      const res = await fetch("/speech/stt", { method: "POST", body });
+      const res = await fetch(
+        `/speech/stt?session_id=${session.id}`, { method: "POST", body });
       if (!res.ok) throw new Error();
       const { text } = await res.json();
-      if (text.trim()) turn(text.trim());
-      else notice("Ich habe nichts verstanden — bitte noch einmal.");
+      if (text.trim()) sendTurn(text.trim(), true);
+      else notice(t("sttEmpty"));
     } catch {
-      notice("Spracherkennung gerade nicht erreichbar — bitte tippen.");
+      notice(t("sttFail"));
     }
   };
   recorder.start();
-  mic.classList.add("recording");
-  mic.setAttribute("aria-pressed", "true");
+  $("mic").classList.add("recording");
+  $("mic").setAttribute("aria-pressed", "true");
 }
 
-mic.addEventListener("click", () => {
+$("mic").addEventListener("click", () => {
   if (recorder && recorder.state === "recording") recorder.stop();
-  else startRecording().catch(() => notice("Kein Mikrofonzugriff."));
+  else startRecording().catch(() => notice(t("micDenied")));
 });
 
 async function speak(text) {
@@ -138,31 +371,72 @@ async function speak(text) {
     const res = await fetch("/speech/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ session_id: session.id, text }),
     });
     if (!res.ok) throw new Error();
     new Audio(URL.createObjectURL(await res.blob())).play();
   } catch {
-    notice("Vorlesen gerade nicht möglich.");
+    notice(t("ttsFail"));
   }
 }
 
-/* --- boot -------------------------------------------------------------- */
+/* ---------- health ------------------------------------------------------ */
+
+async function pollHealth() {
+  try {
+    const h = await (await fetch("/health")).json();
+    for (const [id, state] of [["health-api", h.api],
+                               ["health-gateway", h.gateway]]) {
+      const el = $(id);
+      el.classList.remove("ok", "down", "unknown");
+      el.classList.add(state);
+      el.title = state;
+    }
+  } catch { /* footer badge keeps its last state */ }
+}
+
+/* ---------- wiring ------------------------------------------------------ */
+
+$("composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = $("text").value.trim();
+  if (!text || !session) return;
+  $("text").value = "";
+  sendTurn(text);
+});
+
+$("pizzeria-select").addEventListener("change", (e) => {
+  startSession(e.target.value);
+});
+
+$("start-over").addEventListener("click", () => {
+  if (session) startSession(session.pizzeriaId);
+});
+
+document.querySelectorAll("#lang-switch button").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    if (btn.dataset.lang === lang) return;
+    lang = btn.dataset.lang;
+    applyChrome();
+    if (session) {
+      await fetch("/language", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: session.id, lang }),
+      }).catch(() => {});
+    }
+  });
+});
 
 (async () => {
   try {
-    const cfg = await (await fetch("/config")).json();
-    if (cfg.pizzeria) {
-      document.getElementById("title").textContent = cfg.pizzeria;
-      document.title = cfg.pizzeria;
-    }
-    // TTS is server-proxied audio and works in any context; only the mic
-    // needs getUserMedia/MediaRecorder, which insecure contexts lack.
-    speechEnabled = cfg.speech;    // unset SPEECH_URL → nothing rendered
-    if (speechEnabled) {
-      ttsWrap.hidden = false;
-      if (navigator.mediaDevices && window.MediaRecorder) mic.hidden = false;
-    }
-  } catch { /* text chat works regardless */ }
-  turn(null); // opening turn: the agent greets first
+    await refreshConfig();
+    lang = cfg.lang_default || "de";
+    applyChrome();
+    await startSession(cfg.preselected_id);
+    pollHealth();
+    setInterval(pollHealth, 30000);
+  } catch {
+    notice(I18N[lang].errNetwork);
+  }
 })();
