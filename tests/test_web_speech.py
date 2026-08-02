@@ -1,0 +1,215 @@
+"""Voice wiring, fully offline: the app boots against a stub speech
+service; a headless Chromium with a fake microphone (streaming the real
+audio fixture) exercises the genuine push-to-talk path. Asserts wiring —
+control visibility, STT round trip, spoken-turn metadata, final-message
+TTS, runtime degradation, secure-context gating — never speech quality.
+
+Runs after tests/test_web_e2e.py (module order matters: this module
+re-boots the shared app with SPEECH_* configured)."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import httpx
+import pytest
+
+from tests.stubs import StubGateway, StubPizzaSim, StubSpeech, run_server
+
+PZ1 = "11111111-aaaa-bbbb-cccc-000000000001"
+AUDIO = Path(__file__).parent / "fixtures" / "audio"
+
+
+@pytest.fixture(scope="module")
+def stack():
+    pizzasim = StubPizzaSim()
+    gateway = StubGateway()
+    speech = StubSpeech()
+    ps_server, ps_url = run_server(pizzasim.app)
+    gw_server, gw_url = run_server(gateway.app)
+    sp_server, sp_url = run_server(speech.app)
+    os.environ.update({
+        "PIZZASIM_URL": ps_url,
+        "PIZZASIM_API_KEY": "stub-key",
+        "PIZZERIA_ID": PZ1,
+        "PIZZERIA_LANG": "de",
+        "LITELLM_PIZZA_URL": gw_url,
+        "LITELLM_PIZZA_KEY": "stub-key",
+        "LITELLM_PIZZA_MODEL_1": "scripted-stub",
+        "APP_VERSION": "2.0.0",
+        "SPEECH_URL": sp_url,
+        "SPEECH_STT_MODEL": "stub-stt",
+        "SPEECH_TTS_MODEL": "stub-tts",
+        "SPEECH_TTS_VOICE": "stub-voice",
+    })
+    from channels import web  # boots (again) against the speech-enabled env
+    app_server, app_url = run_server(web.app)
+    yield {"pizzasim": pizzasim, "gateway": gateway, "speech": speech,
+           "url": app_url, "web": web}
+    for server in (app_server, ps_server, gw_server, sp_server):
+        server.should_exit = True
+    for var in ("SPEECH_URL", "SPEECH_STT_MODEL", "SPEECH_TTS_MODEL",
+                "SPEECH_TTS_VOICE"):
+        os.environ.pop(var, None)
+
+
+@pytest.fixture()
+def api(stack):
+    with httpx.Client(base_url=stack["url"], timeout=30.0) as client:
+        yield client
+
+
+# --- API surface -----------------------------------------------------------
+
+def test_config_reports_speech_enabled(api):
+    assert api.get("/config").json()["speech"] is True
+
+
+def test_stt_round_trip_uses_session_language(stack, api):
+    sid = api.post("/session", json={}).json()["session_id"]
+    audio = (AUDIO / "order.de.wav").read_bytes()
+    result = api.post(f"/speech/stt?session_id={sid}",
+                      files={"audio": ("order.de.wav", audio, "audio/wav")})
+    assert result.json() == {"text": "Zwei Margherita bitte"}
+    assert stack["speech"].languages[-1] == "de"
+    api.post("/language", json={"session_id": sid, "lang": "en"})
+    api.post(f"/speech/stt?session_id={sid}",
+             files={"audio": ("order.en.wav",
+                              (AUDIO / "order.en.wav").read_bytes(),
+                              "audio/wav")})
+    assert stack["speech"].languages[-1] == "en"
+
+
+def test_tts_returns_playable_audio(stack, api):
+    sid = api.post("/session", json={}).json()["session_id"]
+    before = stack["speech"].tts_calls
+    result = api.post("/speech/tts", json={"session_id": sid,
+                                           "text": "Hallo"})
+    assert result.status_code == 200
+    assert result.headers["content-type"].startswith("audio/")
+    assert result.content[:4] == b"RIFF"  # a real, playable WAV container
+    assert stack["speech"].tts_calls == before + 1
+
+
+def test_speech_failure_maps_to_502(stack, api):
+    sid = api.post("/session", json={}).json()["session_id"]
+    stack["speech"].mode = "fail"
+    try:
+        result = api.post("/speech/tts", json={"session_id": sid,
+                                               "text": "x"})
+        assert result.status_code == 502
+    finally:
+        stack["speech"].mode = "ok"
+
+
+def test_stt_unknown_session_404(api):
+    assert api.post("/speech/stt?session_id=ghost",
+                    files={"audio": ("a.wav", b"x",
+                                     "audio/wav")}).status_code == 404
+
+
+# --- browser E2E: the real push-to-talk path -------------------------------
+
+@pytest.fixture(scope="module")
+def voice_page_factory(stack):
+    """Firefox with fake media streams: headless Chromium exposes no audio
+    device on this host even with --use-fake-device-for-media-capture
+    (verified), while Firefox's fake-stream pref needs no audio backend.
+    Spec-aligned: the product must work cross-browser, and the offline
+    wiring tests don't care about audio content (the stub returns a fixed
+    transcript). The recorded WAV fixtures drive the LIVE voice test via
+    Chromium's --use-file-for-fake-audio-capture on the voice deployment."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.firefox.launch(firefox_user_prefs={
+            "media.navigator.streams.fake": True,
+            "media.navigator.permission.disabled": True,
+        })
+        context = browser.new_context()
+        yield context.new_page
+        browser.close()
+
+
+def open_app(new_page, stack, init_script=None):
+    page = new_page()
+    if init_script:
+        page.add_init_script(init_script)
+    page.goto(stack["url"], timeout=30000)
+    page.wait_for_selector(".msg.assistant", timeout=30000)
+    return page
+
+
+def test_e2e_voice_push_to_talk_round_trip(voice_page_factory, stack):
+    stack["gateway"].mode = "ok"
+    stack["gateway"].saw_spoken_note = False
+    page = open_app(voice_page_factory, stack)
+    # controls visible on a secure context with speech configured
+    assert page.locator("#mic").is_visible()
+    assert page.locator("#tts-wrap").is_visible()
+    assert not page.locator("#tts-toggle").is_checked()  # off by default
+
+    page.click("#mic")  # push-to-talk: start
+    page.wait_for_selector("#mic.recording", timeout=10000)  # visible state
+    page.wait_for_timeout(1200)
+    page.click("#mic")  # stop → upload → stub transcript drives the turn
+    page.wait_for_selector("text=Zwei Margherita bitte", timeout=30000)
+    page.wait_for_selector("#basket-lines li", timeout=30000)
+    assert "2× Margherita" in page.locator("#basket-lines").inner_text()
+    assert stack["gateway"].saw_spoken_note  # spoken-style note reached model
+    page.close()
+
+
+def test_e2e_tts_fetched_once_for_final_message_only(voice_page_factory,
+                                                     stack):
+    stack["gateway"].mode = "ok"
+    page = open_app(voice_page_factory, stack)
+    page.check("#tts-toggle")
+    before = stack["speech"].tts_calls
+    page.fill("#text", "Was kostet eine Margherita?")
+    page.click("#send")
+    page.wait_for_selector("text=8.5 €", timeout=30000)
+    page.wait_for_function(
+        f"() => fetch('/config').then(() => true) && true", timeout=5000)
+    page.wait_for_timeout(800)  # allow the TTS fetch to complete
+    # the turn contained a tool step AND a final message → exactly one TTS
+    assert stack["speech"].tts_calls == before + 1
+    page.close()
+
+
+def test_e2e_runtime_speech_outage_degrades_to_text(voice_page_factory,
+                                                    stack):
+    stack["gateway"].mode = "ok"
+    page = open_app(voice_page_factory, stack)
+    stack["speech"].mode = "fail"
+    try:
+        page.click("#mic")
+        page.wait_for_selector("#mic.recording", timeout=10000)
+        page.wait_for_timeout(900)
+        page.click("#mic")  # upload fails → degrade
+        page.wait_for_selector(".notice", timeout=30000)
+        page.wait_for_selector("#mic", state="hidden", timeout=10000)
+        assert page.locator("#tts-wrap").is_hidden()
+        # typed ordering continues untouched
+        page.fill("#text", "Zwei Margherita bitte")
+        page.click("#send")
+        page.wait_for_selector("#basket-lines li", timeout=30000)
+    finally:
+        stack["speech"].mode = "ok"
+    page.close()
+
+
+def test_e2e_insecure_context_renders_no_voice_ui(voice_page_factory,
+                                                  stack):
+    """Plain HTTP never presents a voice-capable UI — even with speech
+    fully configured server-side."""
+    stack["gateway"].mode = "ok"
+    page = open_app(
+        voice_page_factory, stack,
+        init_script="Object.defineProperty(window, 'isSecureContext',"
+                    " {value: false});")
+    assert page.locator("#mic").is_hidden()
+    assert page.locator("#tts-wrap").is_hidden()
+    page.fill("#text", "Zwei Margherita bitte")  # text ordering works
+    page.click("#send")
+    page.wait_for_selector("#basket-lines li", timeout=30000)
+    page.close()

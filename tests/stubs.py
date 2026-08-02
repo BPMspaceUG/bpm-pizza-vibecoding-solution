@@ -95,6 +95,7 @@ class StubGateway:
 
     def __init__(self):
         self.mode = "ok"
+        self.saw_spoken_note = False
         self.app = app = FastAPI()
 
         @app.post("/chat/completions")
@@ -102,6 +103,10 @@ class StubGateway:
             if self.mode == "http500":
                 return JSONResponse({"error": "boom"}, status_code=500)
             body = await request.json()
+            if any(m.get("role") == "system"
+                   and "vorgelesen" in (m.get("content") or "")
+                   for m in body["messages"]):
+                self.saw_spoken_note = True
             if self.mode == "empty":
                 return _reply({"content": ""})
             return _reply(self._script(body["messages"]))
@@ -111,9 +116,56 @@ def _reply(message: dict) -> dict:
     return {"choices": [{"message": message}]}
 
 
+def _tiny_wav() -> bytes:
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 800)  # 0.1s silence
+    return buf.getvalue()
+
+
+class StubSpeech:
+    """OpenAI-compatible speech stub: fixed transcript, tiny TTS audio,
+    switchable failure mode. Asserts wiring, not speech quality."""
+
+    def __init__(self):
+        self.transcript = "Zwei Margherita bitte"
+        self.languages: list[str] = []
+        self.tts_calls = 0
+        self.mode = "ok"  # "fail" → 502 on both endpoints
+        self.app = app = FastAPI()
+
+        @app.get("/v1/models")
+        def models():
+            return {"data": []}
+
+        @app.post("/v1/audio/transcriptions")
+        async def stt(request: Request):
+            if self.mode == "fail":
+                return JSONResponse({"error": "down"}, status_code=502)
+            form = await request.form()
+            self.languages.append(str(form.get("language", "")))
+            return {"text": self.transcript}
+
+        @app.post("/v1/audio/speech")
+        async def tts(request: Request):
+            if self.mode == "fail":
+                return JSONResponse({"error": "down"}, status_code=502)
+            self.tts_calls += 1
+            from fastapi.responses import Response
+            return Response(_tiny_wav(), media_type="audio/wav")
+
+
 def _last_tool(messages: list[dict]) -> tuple[str, dict] | None:
-    last = messages[-1]
-    if last.get("role") != "tool":
+    # Skip trailing system messages: spoken turns append the ephemeral
+    # spoken-style note after the conversation tail.
+    last = next((m for m in reversed(messages)
+                 if m.get("role") != "system"), None)
+    if not last or last.get("role") != "tool":
         return None
     call_id = last.get("tool_call_id")
     for msg in reversed(messages):

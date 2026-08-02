@@ -328,7 +328,9 @@ async function refreshConfig() {
   $("version").textContent = "v" + cfg.version;
   $("docs-link").href = cfg.docs_url;
   fillSelector();
-  const speechUsable = cfg.speech;
+  // Voice UI only in a secure context (HTTPS/localhost): plain HTTP must
+  // never present a voice-capable UI (SPEC).
+  const speechUsable = cfg.speech && window.isSecureContext;
   $("tts-wrap").hidden = !speechUsable;
   $("mic").hidden = !(speechUsable && navigator.mediaDevices &&
                       window.MediaRecorder);
@@ -390,6 +392,7 @@ async function startRecording() {
       else notice(t("sttEmpty"));
     } catch {
       notice(t("sttFail"));
+      degradeSpeech();  // runtime outage → text-only for this session
     }
   };
   recorder.start();
@@ -413,7 +416,13 @@ async function speak(text) {
     new Audio(URL.createObjectURL(await res.blob())).play();
   } catch {
     notice(t("ttsFail"));
+    degradeSpeech();  // runtime outage → text-only for this session
   }
+}
+
+function degradeSpeech() {
+  $("mic").hidden = true;
+  $("tts-wrap").hidden = true;
 }
 
 /* ---------- health ------------------------------------------------------ */
