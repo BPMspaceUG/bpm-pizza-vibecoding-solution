@@ -145,8 +145,9 @@ def test_e2e_voice_push_to_talk_round_trip(voice_page_factory, stack):
     page = open_app(voice_page_factory, stack)
     # controls visible on a secure context with speech configured
     assert page.locator("#mic").is_visible()
-    assert page.locator("#tts-wrap").is_visible()
-    assert not page.locator("#tts-toggle").is_checked()  # off by default
+    assert page.locator("#tts-toggle").is_visible()
+    # off by default
+    assert page.locator("#tts-toggle").get_attribute("aria-pressed") == "false"
 
     page.click("#mic")  # push-to-talk: start
     page.wait_for_selector("#mic.recording", timeout=10000)  # visible state
@@ -163,7 +164,9 @@ def test_e2e_tts_fetched_once_for_final_message_only(voice_page_factory,
                                                      stack):
     stack["gateway"].mode = "ok"
     page = open_app(voice_page_factory, stack)
-    page.check("#tts-toggle")
+    page.click("#tts-toggle")
+    assert page.locator("#tts-toggle").get_attribute("aria-pressed") == "true"
+    assert page.locator("#tts-toggle").inner_text().strip() == "🔊"
     before = stack["speech"].tts_calls
     page.fill("#text", "Was kostet eine Margherita?")
     page.click("#send")
@@ -173,6 +176,46 @@ def test_e2e_tts_fetched_once_for_final_message_only(voice_page_factory,
     page.wait_for_timeout(800)  # allow the TTS fetch to complete
     # the turn contained a tool step AND a final message → exactly one TTS
     assert stack["speech"].tts_calls == before + 1
+
+    # off-path: toggling back off must stop read-aloud — the stub's call
+    # counter is the oracle, not the button's own state.
+    page.click("#tts-toggle")
+    assert page.locator("#tts-toggle").get_attribute("aria-pressed") == "false"
+    assert page.locator("#tts-toggle").inner_text().strip() == "🔇"
+    page.fill("#text", "Zwei Margherita bitte")
+    page.click("#send")
+    page.wait_for_selector("text=Wie ist Ihr Vorname?", timeout=30000)
+    page.wait_for_timeout(800)  # a TTS fetch would have landed by now
+    assert stack["speech"].tts_calls == before + 1
+    page.close()
+
+
+def test_e2e_tts_toggle_header_placement_and_i18n(voice_page_factory, stack):
+    stack["gateway"].mode = "ok"
+    page = open_app(voice_page_factory, stack)
+    assert page.eval_on_selector(
+        "#tts-toggle",
+        "el => [el.closest('header') !== null, el.previousElementSibling.id,"
+        " el.nextElementSibling.id]") == [True, "lang-switch", "start-over"]
+    toggle = page.locator("#tts-toggle")
+    assert toggle.get_attribute("title") == "Antworten vorlesen"
+    assert toggle.get_attribute("aria-label") == "Antworten vorlesen"
+    page.click("#lang-switch button[data-lang=en]")
+    assert toggle.get_attribute("title") == "Read replies aloud"
+    assert toggle.get_attribute("aria-label") == "Read replies aloud"
+    assert toggle.get_attribute("aria-pressed") == "false"  # i18n ≠ state
+    page.close()
+
+
+def test_e2e_tts_toggle_keyboard_accessible(voice_page_factory, stack):
+    stack["gateway"].mode = "ok"
+    page = open_app(voice_page_factory, stack)
+    page.focus("#tts-toggle")
+    assert page.evaluate("() => document.activeElement.id") == "tts-toggle"
+    page.keyboard.press("Space")
+    assert page.locator("#tts-toggle").get_attribute("aria-pressed") == "true"
+    page.keyboard.press("Enter")
+    assert page.locator("#tts-toggle").get_attribute("aria-pressed") == "false"
     page.close()
 
 
@@ -188,7 +231,7 @@ def test_e2e_runtime_speech_outage_degrades_to_text(voice_page_factory,
         page.click("#mic")  # upload fails → degrade
         page.wait_for_selector(".notice", timeout=30000)
         page.wait_for_selector("#mic", state="hidden", timeout=10000)
-        assert page.locator("#tts-wrap").is_hidden()
+        assert page.locator("#tts-toggle").is_hidden()
         # typed ordering continues untouched
         page.fill("#text", "Zwei Margherita bitte")
         page.click("#send")
@@ -245,7 +288,7 @@ def test_live_voice_acceptance(lang, fixture, name_reply, yes):
         if lang == "en":
             page.locator("#lang-switch button[data-lang=en]").click()
         assert page.locator("#mic").is_visible()  # HTTPS + speech up
-        page.check("#tts-toggle")
+        page.click("#tts-toggle")
 
         page.click("#mic")
         page.wait_for_selector("#mic.recording", timeout=15000)
@@ -286,7 +329,7 @@ def test_e2e_insecure_context_renders_no_voice_ui(voice_page_factory,
         init_script="Object.defineProperty(window, 'isSecureContext',"
                     " {value: false});")
     assert page.locator("#mic").is_hidden()
-    assert page.locator("#tts-wrap").is_hidden()
+    assert page.locator("#tts-toggle").is_hidden()
     page.fill("#text", "Zwei Margherita bitte")  # text ordering works
     page.click("#send")
     page.wait_for_selector("#basket-lines li", timeout=30000)

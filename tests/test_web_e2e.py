@@ -226,7 +226,7 @@ def test_e2e_full_order_with_header_footer_contract(page_factory, stack):
     page.wait_for_selector("#health-gateway.ok", timeout=15000)
     # speech disabled → controls not rendered
     assert page.locator("#mic").is_hidden()
-    assert page.locator("#tts-wrap").is_hidden()
+    assert page.locator("#tts-toggle").is_hidden()
 
     def say(text):
         page.fill("#text", text)

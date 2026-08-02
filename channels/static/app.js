@@ -80,7 +80,8 @@ function applyChrome() {
   $("send").textContent = t("send");
   $("start-over").textContent = t("startOver");
   $("basket-title").textContent = t("basket");
-  $("tts-label").textContent = t("ttsLabel");
+  $("tts-toggle").title = t("ttsLabel");
+  $("tts-toggle").setAttribute("aria-label", t("ttsLabel"));
   $("list-unavailable").textContent = t("listUnavailable");
   document.querySelectorAll("#lang-switch button").forEach((b) =>
     b.classList.toggle("active", b.dataset.lang === lang));
@@ -289,7 +290,7 @@ async function sendTurn(text, spoken = false) {
   if (text !== null) addMsg("user", text);
   const finalText = await streamPost(
     "/chat", { session_id: session.id, text, spoken }, text ?? undefined);
-  if (finalText && cfg.speech && $("tts-toggle").checked) speak(finalText);
+  if (finalText && cfg.speech && ttsOn()) speak(finalText);
 }
 
 async function confirmOrder(revision) {
@@ -299,7 +300,7 @@ async function confirmOrder(revision) {
   const finalText = await streamPost(
     "/confirm", { session_id: session.id, revision },
     () => confirmOrder(revision));
-  if (finalText && cfg.speech && $("tts-toggle").checked) speak(finalText);
+  if (finalText && cfg.speech && ttsOn()) speak(finalText);
 }
 
 /* ---------- sessions / tenancy ----------------------------------------- */
@@ -331,7 +332,7 @@ async function refreshConfig() {
   // Voice UI only in a secure context (HTTPS/localhost): plain HTTP must
   // never present a voice-capable UI (SPEC).
   const speechUsable = cfg.speech && window.isSecureContext;
-  $("tts-wrap").hidden = !speechUsable;
+  $("tts-toggle").hidden = !speechUsable;
   $("mic").hidden = !(speechUsable && navigator.mediaDevices &&
                       window.MediaRecorder);
 }
@@ -405,6 +406,8 @@ $("mic").addEventListener("click", () => {
   else startRecording().catch(() => notice(t("micDenied")));
 });
 
+const ttsOn = () => $("tts-toggle").getAttribute("aria-pressed") === "true";
+
 async function speak(text) {
   try {
     const res = await fetch("/speech/tts", {
@@ -422,7 +425,7 @@ async function speak(text) {
 
 function degradeSpeech() {
   $("mic").hidden = true;
-  $("tts-wrap").hidden = true;
+  $("tts-toggle").hidden = true;
 }
 
 /* ---------- health ------------------------------------------------------ */
@@ -452,6 +455,12 @@ $("composer").addEventListener("submit", (e) => {
 
 $("pizzeria-select").addEventListener("change", (e) => {
   startSession(e.target.value);
+});
+
+$("tts-toggle").addEventListener("click", () => {
+  const on = $("tts-toggle").getAttribute("aria-pressed") !== "true";
+  $("tts-toggle").setAttribute("aria-pressed", on ? "true" : "false");
+  $("tts-toggle").textContent = on ? "🔊" : "🔇";
 });
 
 $("start-over").addEventListener("click", () => {

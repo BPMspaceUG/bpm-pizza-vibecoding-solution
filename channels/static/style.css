@@ -68,7 +68,9 @@ details.steps pre { white-space: pre-wrap; word-break: break-all;
 #mic.recording { background: #c0392b; color: #fff;
   animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .6; } }
-#tts-wrap { font-size: .8rem; color: #555; }
+#tts-toggle { line-height: 1; }
+#tts-toggle[aria-pressed="true"] { background: #2f6f4f; color: #fff;
+  border-color: #2f6f4f; }
 
 footer { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
   padding-top: .5rem; border-top: 1px solid #e5ded2; font-size: .8rem;
