@@ -159,3 +159,15 @@ regression).
 Round 19 (reviews/round19-impl2.md): completeness 5, correctness 5,
 error_handling 5, simplicity 4, spec_compliance 5 — TOTAL 24/25,
 VERDICT: APPROVED.
+
+## Rounds 22-24 — Delta Plan v3 gate (Issue #3)
+
+Round 22: 17/25 CHANGES_REQUIRED (browser-driven HTTPS live voice proof,
+no API fallback for push-to-talk E2E, redaction incl. session.messages,
+name confirmation in all spoken flows — applied).
+Round 23: 18/25 CHANGES_REQUIRED (runtime speech degradation design+test,
+isSecureContext gating in UI+test, ticket 7 skip contract — applied).
+Round 24: 18/25 CHANGES_REQUIRED (editorial: transcript fixtures in the
+redaction sweep, ticket 5/7 checkboxes aligned with prose — applied
+post-gate). Stage stopped after max 3 rounds per SPEC protocol; open
+verdict surfaced to the operator.

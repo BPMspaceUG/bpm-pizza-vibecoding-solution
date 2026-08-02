@@ -424,7 +424,9 @@ Tests (ticket introduces them):
   no snapshot, no emitted event, no JSONL log line, and **no entry of
   `session.messages`** (the model-visible tool-message serialization is
   string-scanned too; an implementation that leaks the street into tool
-  content the model reads must fail this test).
+  content the model reads must fail this test). The same sweep covers
+  transcript artifacts: golden transcript fixtures and any
+  transcript-derived serialization must not contain saved street text.
 - Mutual exclusion + `no_saved_street` paths.
 - Two new golden transcripts: saved-address reuse (lookup → confirm
   question → flag-based set_customer → order) and decline/fallback
@@ -525,10 +527,16 @@ Live proof (opt-in, release-gating per SPEC):
    ☐ push-to-talk round trip ☐ single final-message TTS fetch
    ☐ mid-session speech failure degrades to text-only ☐ insecure
    context renders no speech controls.
-5. Name-confirmation regression transcript. ☐ corrected name only,
-   after confirmation.
+5. Name-confirmation regression transcripts, all three cases.
+   ☐ wrong-name correction: corrected name only, after confirmation
+   ☐ spoken happy path, dictated street: name confirmed before submit
+   ☐ spoken happy path, saved street: name confirmed in addition to the
+   saved-address yes/no question.
 6. deploy/ speech service definition + README voice section.
    ☐ neutral (no vendor/model names) ☐ HTTPS requirement documented.
 7. Live voice acceptance test (opt-in) + docs. ☐ DE+EN fixtures
    ☐ gated on `PIZZA_LIVE_VOICE=1` + `PIZZA_LIVE_VOICE_URL` and skips
-   cleanly when either is unset ☐ full-order verification via API.
+   cleanly when either is unset ☐ real HTTPS browser path (mic capture →
+   STT → chat → confirm control) ☐ STT failing to produce an
+   order-driving transcript fails the test ☐ final-message TTS returns
+   non-empty playable audio ☐ full-order verification via API.
