@@ -469,6 +469,19 @@ Offline tests:
   and only for the final assistant message (StubSpeech call counter);
   toggle OFF by default. This real UI push-to-talk path is mandatory —
   API-level speech tests supplement it and never substitute for it.
+- **Runtime degradation:** when a speech call fails after startup (STT or
+  TTS returns an error / the proxy answers 502), the UI hides the mic and
+  the TTS toggle for the rest of the session and shows a plain-language
+  notice; typed ordering continues untouched. E2E test: StubSpeech is
+  switched to failure mode mid-session → controls disappear, a typed
+  order still completes. (Startup-down behaviour — probe fails → controls
+  never rendered — exists since v1 and keeps its test.)
+- **Secure-context gating in the UI, not just in the docs:** the speech
+  controls render only when `window.isSecureContext` is true (HTTPS or
+  localhost) in addition to `cfg.speech` and the media APIs. E2E test: an
+  init script forces `isSecureContext = false` → with speech fully
+  configured, neither mic nor TTS toggle is rendered and text ordering
+  works — plain HTTP never presents a voice-capable UI.
 - Name-confirmation regression, three scripted cases (the saved-address
   question is **not** a substitute for name confirmation):
   1. plausible-but-wrong spoken name: agent repeats the name back, the
@@ -509,10 +522,13 @@ Live proof (opt-in, release-gating per SPEC):
 3. StubSpeech + audio fixtures + API-level speech tests. ☐ stt round
    trip with session lang ☐ tts bytes ☐ 404 when unconfigured.
 4. Browser E2E voice wiring (fake media device). ☐ mic/toggle visible
-   ☐ push-to-talk round trip ☐ single final-message TTS fetch.
+   ☐ push-to-talk round trip ☐ single final-message TTS fetch
+   ☐ mid-session speech failure degrades to text-only ☐ insecure
+   context renders no speech controls.
 5. Name-confirmation regression transcript. ☐ corrected name only,
    after confirmation.
 6. deploy/ speech service definition + README voice section.
    ☐ neutral (no vendor/model names) ☐ HTTPS requirement documented.
-7. Live voice acceptance test (opt-in) + docs. ☐ DE+EN fixtures ☐ skips
-   cleanly without SPEECH_URL ☐ full-order verification via API.
+7. Live voice acceptance test (opt-in) + docs. ☐ DE+EN fixtures
+   ☐ gated on `PIZZA_LIVE_VOICE=1` + `PIZZA_LIVE_VOICE_URL` and skips
+   cleanly when either is unset ☐ full-order verification via API.
