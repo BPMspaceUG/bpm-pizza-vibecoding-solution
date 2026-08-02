@@ -334,3 +334,64 @@ def test_e2e_insecure_context_renders_no_voice_ui(voice_page_factory,
     page.click("#send")
     page.wait_for_selector("#basket-lines li", timeout=30000)
     page.close()
+
+
+# --- per-language TTS voice (issue #11) ------------------------------------
+# Order matters: the fallback cases run against the base stack FIRST; the
+# EN stack then re-boots the shared app object with the EN pair configured
+# (replacing app.state for every earlier server), so it comes last.
+
+def _tts(url, speech, lang):
+    """One TTS request in a fresh session of the given language; returns
+    the (model, voice) pair the stub recorded for it."""
+    with httpx.Client(base_url=url, timeout=30.0) as client:
+        sid = client.post("/session", json={}).json()["session_id"]
+        if lang != "de":
+            client.post("/language", json={"session_id": sid, "lang": lang})
+        assert client.post("/speech/tts", json={
+            "session_id": sid, "text": "Hallo"}).status_code == 200
+    return speech.tts_requests[-1]
+
+
+def test_tts_en_session_without_en_pair_falls_back(stack):
+    # The base stack booted without the EN vars: today's behavior, kept.
+    assert _tts(stack["url"], stack["speech"], "en") == \
+        ("stub-tts", "stub-voice")
+
+
+def test_tts_half_configured_en_pair_falls_back(stack):
+    # ponytail: both-or-neither via a spot re-instantiation of the service
+    # (a fourth full app boot would fight the shared app.state for one env
+    # permutation; the service object is the unit that owns the rule).
+    os.environ["SPEECH_TTS_MODEL_EN"] = "stub-tts-en"
+    try:
+        from channels.speech import SpeechService
+        service = SpeechService()
+        service.tts("Hallo", "en")
+    finally:
+        os.environ.pop("SPEECH_TTS_MODEL_EN", None)
+    assert stack["speech"].tts_requests[-1] == ("stub-tts", "stub-voice")
+
+
+@pytest.fixture(scope="module")
+def stack_en(stack):
+    os.environ.update({
+        "SPEECH_TTS_MODEL_EN": "stub-tts-en",
+        "SPEECH_TTS_VOICE_EN": "stub-voice-en",
+    })
+    from channels import web
+    server, url = run_server(web.app)  # re-boots with the EN pair present
+    yield {"speech": stack["speech"], "url": url}
+    server.should_exit = True
+    for var in ("SPEECH_TTS_MODEL_EN", "SPEECH_TTS_VOICE_EN"):
+        os.environ.pop(var, None)
+
+
+def test_tts_en_session_uses_en_pair(stack_en):
+    assert _tts(stack_en["url"], stack_en["speech"], "en") == \
+        ("stub-tts-en", "stub-voice-en")
+
+
+def test_tts_de_session_keeps_default_pair(stack_en):
+    assert _tts(stack_en["url"], stack_en["speech"], "de") == \
+        ("stub-tts", "stub-voice")

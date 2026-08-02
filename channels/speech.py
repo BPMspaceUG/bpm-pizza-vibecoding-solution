@@ -26,6 +26,16 @@ class SpeechService:
         self.stt_model = optional_env("SPEECH_STT_MODEL")
         self.tts_model = optional_env("SPEECH_TTS_MODEL")
         self.voice = optional_env("SPEECH_TTS_VOICE")
+        # Optional English voice: both-or-neither. A monolingual default
+        # voice cannot speak English, so English sessions may get their
+        # own pair; half-configured counts as unset (issue #11).
+        self.tts_model_en = optional_env("SPEECH_TTS_MODEL_EN")
+        self.voice_en = optional_env("SPEECH_TTS_VOICE_EN")
+        if bool(self.tts_model_en) != bool(self.voice_en):
+            print("SPEECH_TTS_MODEL_EN/SPEECH_TTS_VOICE_EN: only one is "
+                  "set — English falls back to the default voice",
+                  file=sys.stderr)
+            self.tts_model_en = self.voice_en = None
         self.enabled = False
         if self.url and self.stt_model and self.tts_model and self.voice:
             try:
@@ -50,10 +60,13 @@ class SpeechService:
         return response.json().get("text", "")
 
     def tts(self, text: str, lang: str) -> tuple[bytes, str]:
+        model, voice = self.tts_model, self.voice
+        if lang == "en" and self.tts_model_en and self.voice_en:
+            model, voice = self.tts_model_en, self.voice_en
         try:
             response = httpx.post(
                 f"{self.url}/v1/audio/speech",
-                json={"model": self.tts_model, "voice": self.voice,
+                json={"model": model, "voice": voice,
                       "input": text, "language": lang},
                 timeout=60.0)
             response.raise_for_status()

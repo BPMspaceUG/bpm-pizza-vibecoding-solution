@@ -70,6 +70,10 @@ is the degraded mode for dev/test and outages. To deploy voice:
    the UI hides all voice controls outside a secure context.
 3. Set `SPEECH_URL`, `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL`,
    `SPEECH_TTS_VOICE` on the app. STT/TTS use the session language.
+   If the default voice is monolingual (e.g. a German voice), also set
+   `SPEECH_TTS_MODEL_EN` + `SPEECH_TTS_VOICE_EN` (both or neither) so
+   English sessions are spoken by an English voice; without the pair,
+   English falls back to the default voice.
 4. Release-gating proof: run the live voice acceptance test against the
    deployment —
    `PIZZA_LIVE_VOICE=1 PIZZA_LIVE_VOICE_URL=https://<domain> venv/bin/python -m pytest tests/test_web_speech.py -k live_voice`

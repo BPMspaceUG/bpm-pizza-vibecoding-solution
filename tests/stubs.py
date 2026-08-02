@@ -136,6 +136,7 @@ class StubSpeech:
         self.transcript = "Zwei Margherita bitte"
         self.languages: list[str] = []
         self.tts_calls = 0
+        self.tts_requests: list[tuple[str, str]] = []  # (model, voice)
         self.mode = "ok"  # "fail" → 502 on both endpoints
         self.app = app = FastAPI()
 
@@ -156,6 +157,9 @@ class StubSpeech:
             if self.mode == "fail":
                 return JSONResponse({"error": "down"}, status_code=502)
             self.tts_calls += 1
+            body = await request.json()
+            self.tts_requests.append(
+                (str(body.get("model", "")), str(body.get("voice", ""))))
             from fastapi.responses import Response
             return Response(_tiny_wav(), media_type="audio/wav")
 
