@@ -34,9 +34,9 @@ APOLOGY = {
 
 SPOKEN_NOTE = {
     "de": "Diese Antwort wird vorgelesen: höchstens drei Gerichte nennen, "
-          "Zeiten in Minuten, Bestellnummern in Gruppen, kurze Sätze.",
+          "Bestellnummern in Gruppen, kurze Sätze.",
     "en": "This reply will be spoken aloud: name at most three dishes, "
-          "times in minutes, order ids in groups, short sentences.",
+          "order ids in groups, short sentences.",
 }
 
 

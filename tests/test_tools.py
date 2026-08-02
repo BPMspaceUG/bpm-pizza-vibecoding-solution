@@ -806,3 +806,23 @@ def test_live_acceptance():
     detail = client.get_order(order_id)
     assert detail["customer"]["first_name"] == "Akzeptanz"
     assert tools._same_items(detail["items"], order.items)
+
+
+def test_no_delivery_time_in_customer_facing_wording():
+    """Issue #14: replies never state a delivery/wait time. The prompt
+    must not instruct one, the spoken note must not demand one, and the
+    transcript fixtures must not exemplify one."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for prompt in ("prompts/system.de.md", "prompts/system.en.md"):
+        text = (root / prompt).read_text()
+        assert not re.search(r"Wartezeit in Minuten|wait time in minutes"
+                             r"|umgerechnet|converted from", text), prompt
+        assert re.search(r"[Nn]iemals eine Liefer|[Nn]ever state a delivery",
+                         text), f"{prompt}: prohibition missing"
+    from core.agent import SPOKEN_NOTE
+    for lang in ("de", "en"):
+        assert "inute" not in SPOKEN_NOTE[lang]
+    for fixture in (root / "tests" / "transcripts").glob("*.json"):
+        assert "inute" not in fixture.read_text(), fixture.name

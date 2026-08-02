@@ -17,7 +17,7 @@
      "script": [
        {"tool": "confirm_order", "args": {"revision": 2}},
        {"tool": "submit_order", "args": {}},
-       {"say": "Bestellt, Eva! Etwa 2 Minuten."}
+       {"say": "Bestellt, Eva!"}
      ]}
   ],
   "expect": {

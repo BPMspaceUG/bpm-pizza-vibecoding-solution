@@ -22,7 +22,7 @@
      "script": [
        {"tool": "confirm_order", "args": {"revision": 2}},
        {"tool": "submit_order", "args": {}},
-       {"say": "Bestellt, in etwa 2 Minuten fertig."}
+       {"say": "Bestellt!"}
      ]}
   ],
   "expect": {

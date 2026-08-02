@@ -18,7 +18,7 @@
     {"user": "Okay, did it work?",
      "script": [
        {"tool": "submit_order", "args": {}},
-       {"say": "Yes — it's in. Your order number ends in 1, ready in about 5 minutes."}
+       {"say": "Yes — it's in. Your order number ends in 1."}
      ]}
   ],
   "expect": {
