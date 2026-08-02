@@ -18,7 +18,7 @@
      "script": [
        {"tool": "confirm_order", "args": {"revision": 2}},
        {"tool": "submit_order", "args": {}},
-       {"say": "Bestellt!"}
+       {"say": "Bestellt! Die Bestellnummer steht unter der Bestellkarte."}
      ]}
   ],
   "expect": {

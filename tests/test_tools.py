@@ -826,3 +826,19 @@ def test_no_delivery_time_in_customer_facing_wording():
         assert "inute" not in SPOKEN_NOTE[lang]
     for fixture in (root / "tests" / "transcripts").glob("*.json"):
         assert "inute" not in fixture.read_text(), fixture.name
+
+
+def test_spoken_note_points_to_card_not_uuid():
+    """Issue #13: spoken replies do not recite the order number — they
+    point to the number shown beneath the order card."""
+    from core.agent import SPOKEN_NOTE
+    for lang, pointer in (("de", "unter der Bestellkarte"),
+                          ("en", "beneath the order card")):
+        assert "ruppen" not in SPOKEN_NOTE[lang]  # Gruppen/groups gone
+        assert pointer in SPOKEN_NOTE[lang]
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for prompt, marker in (("prompts/system.de.md", "nicht vorgelesen"),
+                           ("prompts/system.en.md", "not spoken")):
+        text = (root / prompt).read_text()
+        assert marker in text  # grouped numbers scoped to non-spoken
