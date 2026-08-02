@@ -195,6 +195,11 @@ class FakeClient:
     def check_street(self, street):
         return {"street": street, "deliverable": True}
 
+    def list_customers(self):
+        if getattr(self, "customers_effect", None):
+            raise self.customers_effect
+        return getattr(self, "customers", [])
+
 
 @pytest.fixture
 def fake():
@@ -454,6 +459,136 @@ def test_check_street(menu, fake):
     result = tools.dispatch(Order(), menu, fake, "check_street",
                             {"street": "via Roma"})
     assert result["deliverable"] is True and "snapshot" in result
+
+
+# --- street lookup for returning customers (delta v3 ticket 1) ------------
+
+SAVED = {"id": "c-1", "first_name": "Marko",
+         "street_one": "Meyer Teststraße 4", "street_two": None,
+         "created_at": 1, "deleted_at": None}
+
+
+def test_lookup_customer_known_and_unknown(menu, fake):
+    fake.customers = [SAVED]
+    result = tools.dispatch(Order(), menu, fake, "lookup_customer",
+                            {"first_name": "marko"})  # case-insensitive
+    assert result["customer_exists"] is True
+    assert result["saved_street_available"] is True
+    assert "Meyer" not in json.dumps(result)  # booleans only, never text
+    result = tools.dispatch(Order(), menu, fake, "lookup_customer",
+                            {"first_name": "Nessuno"})
+    assert result == {"customer_exists": False,
+                      "saved_street_available": False,
+                      "snapshot": result["snapshot"]}
+
+
+def test_lookup_customer_without_saved_street(menu, fake):
+    fake.customers = [{**SAVED, "street_one": None}]
+    result = tools.dispatch(Order(), menu, fake, "lookup_customer",
+                            {"first_name": "Marko"})
+    assert result["customer_exists"] is True
+    assert result["saved_street_available"] is False
+
+
+def test_lookup_customer_api_error_is_nonfatal_tool_error(menu, fake):
+    fake.customers_effect = ApiTimeout("t")
+    result = tools.dispatch(Order(), menu, fake, "lookup_customer",
+                            {"first_name": "Marko"})
+    assert result["error"]["code"] == "api_unavailable"
+
+
+def test_use_saved_street_copies_in_code(menu, fake):
+    fake.customers = [SAVED]
+    order = Order()
+    result = tools.dispatch(order, menu, fake, "set_customer",
+                            {"first_name": "marko",
+                             "use_saved_street": True})
+    assert "error" not in result
+    # canonical casing from the record — no ghost near-duplicate
+    assert order.customer.first_name == "Marko"
+    assert order.customer.street_one == "Meyer Teststraße 4"
+    assert order.customer.street_from_saved is True
+    # redacted view everywhere the model/UI looks
+    assert result["customer"] == {"first_name": "Marko",
+                                  "street_one": None,
+                                  "street_on_file": True}
+    assert result["snapshot"]["customer"]["street_on_file"] is True
+    assert "Meyer" not in json.dumps(result)
+
+
+def test_use_saved_street_mutually_exclusive_and_missing(menu, fake):
+    fake.customers = [SAVED]
+    result = tools.dispatch(Order(), menu, fake, "set_customer",
+                            {"first_name": "Marko",
+                             "street_one": "via Roma",
+                             "use_saved_street": True})
+    assert result["error"]["code"] == "invalid_arguments"
+    fake.customers = []
+    result = tools.dispatch(Order(), menu, fake, "set_customer",
+                            {"first_name": "Marko",
+                             "use_saved_street": True})
+    assert result["error"]["code"] == "no_saved_street"
+
+
+def test_dictated_street_still_echoed_and_submitted(menu, fake):
+    order = Order()
+    result = tools.dispatch(order, menu, fake, "set_customer",
+                            {"first_name": "Anna",
+                             "street_one": "via Roma 1"})
+    assert result["customer"]["street_one"] == "via Roma 1"  # own input
+    assert "street_on_file" not in result["customer"]
+
+
+def test_saved_street_redaction_end_to_end(menu, fake):
+    """The saved street text appears in exactly ONE place: the outbound
+    submit payload. Not in any snapshot, emitted event, log line, or
+    model-visible message."""
+    from core.agent import Agent, LOG_DIR, Session as AgentSession
+    fake.customers = [SAVED]
+    captured = {}
+    real_submit = fake.submit_order
+
+    def spy(customer, items):
+        captured["customer"] = customer
+        return real_submit(customer, items)
+    fake.submit_order = spy
+
+    script = iter([
+        [("lookup_customer", {"first_name": "Marko"})],
+        [("set_customer", {"first_name": "Marko",
+                           "use_saved_street": True}),
+         ("add_items", {"items": [{"type": "pizza", "code": "margherita",
+                                   "qty": 1}]}),
+         ("read_back", {})],
+    ])
+
+    def stub(messages, tool_schemas):
+        calls = next(script, None)
+        if calls:
+            return {"tool_calls": [
+                {"id": f"c-{name}", "type": "function",
+                 "function": {"name": name, "arguments": json.dumps(args)}}
+                for name, args in calls]}
+        return {"content": "Passt das so?"}
+
+    session = AgentSession(order=Order(), menu=menu,
+                           messages=[{"role": "system", "content": "s"}],
+                           client=fake)
+    agent = Agent(config_stub(), chat_fn=stub)
+    events = []
+    agent.run_turn(session, "Ich heiße Marko", events.append)
+    agent.run_turn(session, "Eine Margherita, gespeicherte Adresse",
+                   events.append)
+    agent.confirm_and_submit(session, session.order.revision, events.append)
+
+    street = "Meyer Teststraße 4"
+    assert captured["customer"]["street_one"] == street  # the ONE place
+    assert street not in json.dumps(events, ensure_ascii=False)
+    assert street not in json.dumps(session.messages, ensure_ascii=False)
+    log_text = "".join(
+        f.read_text() for f in LOG_DIR.glob(f"agent-{session.id}.jsonl"))
+    assert street not in log_text
+    assert session.order.state is State.SUBMITTED
 
 
 # --- session factory, language, confirm path (tickets 2-4) ----------------

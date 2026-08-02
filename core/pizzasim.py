@@ -138,6 +138,14 @@ class PizzaSim:
             f"pizzeria {self.pizzeria_id} not found on the PizzaSim server"
         )
 
+    def list_customers(self) -> list[dict]:
+        """Customer list — used only for address-reuse lookup, never to
+        disclose address text (SPEC). Deleted customers are filtered."""
+        customers = self._request(
+            "GET", f"/pizzerias/{self.pizzeria_id}/customers"
+        )["customers"]
+        return [c for c in customers if not c.get("deleted_at")]
+
     def list_orders(self) -> list[dict]:
         return self._request(
             "GET", f"/pizzerias/{self.pizzeria_id}/orders"

@@ -40,9 +40,25 @@ class Item:
 class Customer:
     first_name: str
     street_one: str | None = None
+    # True when street_one was copied from saved customer data: the text
+    # then never appears in snapshots, events, transcripts or logs — only
+    # in the outbound submit payload (SPEC saved-street redaction).
+    street_from_saved: bool = False
 
     def as_dict(self) -> dict:
+        """Redacted view: feeds SNAPSHOT and thereby every tool result,
+        streamed event, model-visible message and log line."""
+        if self.street_from_saved:
+            return {"first_name": self.first_name, "street_one": None,
+                    "street_on_file": True}
         return {"first_name": self.first_name, "street_one": self.street_one}
+
+    def as_submit_dict(self) -> dict:
+        """The real thing — used only to build the POST /orders body."""
+        body = {"first_name": self.first_name}
+        if self.street_one:
+            body["street_one"] = self.street_one
+        return body
 
 
 @dataclass

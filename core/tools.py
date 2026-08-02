@@ -53,13 +53,26 @@ TOOL_SCHEMAS = [
                         "code": {"type": "string"},
                         "qty": {"type": "integer", "minimum": 1}},
                     "required": ["type", "code"]}},
+    {"name": "lookup_customer",
+     "description": "Check whether a first name is a known customer with "
+                    "a saved street. Returns booleans only — never the "
+                    "address itself. Use after the customer gave their "
+                    "name; on a saved street, ask whether to deliver to "
+                    "the saved address without reciting it.",
+     "parameters": {"type": "object",
+                    "properties": {
+                        "first_name": {"type": "string", "minLength": 1}},
+                    "required": ["first_name"]}},
     {"name": "set_customer",
-     "description": "Store the customer's first name and, optionally, "
-                    "street.",
+     "description": "Store the customer's first name and street. Either "
+                    "pass street_one, or pass use_saved_street=true after "
+                    "the customer confirmed delivery to their saved "
+                    "address — never both.",
      "parameters": {"type": "object",
                     "properties": {
                         "first_name": {"type": "string", "minLength": 1},
-                        "street_one": {"type": "string"}},
+                        "street_one": {"type": "string"},
+                        "use_saved_street": {"type": "boolean"}},
                     "required": ["first_name"]}},
     {"name": "read_back",
      "description": "The complete order as it stands — read this back to "
@@ -94,6 +107,17 @@ def openai_tools() -> list[dict]:
 def _error(code: str, message: str, candidates: list | None = None) -> dict:
     return {"error": {"code": code, "message": message,
                       "candidates": candidates or []}}
+
+
+def _saved_customer(client: PizzaSim, first_name: str) -> dict | None:
+    """Case-insensitive match on the unique-per-pizzeria first name.
+    Deleted customers are already filtered by the client. Raises
+    PizzaSimError upward — dispatch maps it to api_unavailable, which the
+    prompt treats as non-fatal (fall back to asking for the street)."""
+    for record in client.list_customers():
+        if record.get("first_name", "").lower() == first_name.lower():
+            return record
+    return None
 
 
 def _int_qty(value) -> int:
@@ -158,11 +182,39 @@ def _dispatch(order: Order, menu: Menu, client: PizzaSim,
                           None if qty is None else _int_qty(qty))
         return {"snapshot": order.snapshot()}
 
+    if name == "lookup_customer":
+        first_name = (args.get("first_name") or "").strip()
+        if not first_name:
+            return _error("invalid_arguments", "I still need a name.")
+        record = _saved_customer(client, first_name)
+        return {"customer_exists": record is not None,
+                "saved_street_available": bool(record
+                                               and record.get("street_one")),
+                "snapshot": order.snapshot()}
+
     if name == "set_customer":
         first_name = (args.get("first_name") or "").strip()
         if not first_name:
             return _error("invalid_state", "I still need a name.")
-        customer = Customer(first_name, args.get("street_one") or None)
+        street = args.get("street_one") or None
+        if args.get("use_saved_street"):
+            if street:
+                return _error(
+                    "invalid_arguments",
+                    "Either a street or the saved address — not both.")
+            record = _saved_customer(client, first_name)
+            if not record or not record.get("street_one"):
+                return _error(
+                    "no_saved_street",
+                    "I don't have a saved address under that name — "
+                    "what's the street?")
+            # The code copies the saved street; canonical name casing from
+            # the record prevents a ghost-customer near-duplicate.
+            customer = Customer(record["first_name"],
+                                record["street_one"],
+                                street_from_saved=True)
+        else:
+            customer = Customer(first_name, street)
         state.set_customer(order, customer)
         return {"customer": customer.as_dict(),
                 "snapshot": order.snapshot()}
@@ -240,9 +292,7 @@ def _submit(order: Order, client: PizzaSim) -> dict:
                 return {**order.result, "snapshot": order.snapshot()}
         # verified absent (or a different order) → exactly one real retry
 
-    customer = order.customer.as_dict()
-    if customer.get("street_one") is None:
-        customer.pop("street_one")
+    customer = order.customer.as_submit_dict()
     items = [{"type": i.type, "code": i.code, "qty": i.qty,
               "extras": list(i.extras)} for i in order.items]
     try:
