@@ -73,7 +73,9 @@ is the degraded mode for dev/test and outages. To deploy voice:
    If the default voice is monolingual (e.g. a German voice), also set
    `SPEECH_TTS_MODEL_EN` + `SPEECH_TTS_VOICE_EN` (both or neither) so
    English sessions are spoken by an English voice; without the pair,
-   English falls back to the default voice.
+   English falls back to the default voice. If the speech service
+   requires a bearer token, set `SPEECH_API_KEY` as well; unset means no
+   `Authorization` header is sent.
 4. Release-gating proof: run the live voice acceptance test against the
    deployment —
    `PIZZA_LIVE_VOICE=1 PIZZA_LIVE_VOICE_URL=https://<domain> venv/bin/python -m pytest tests/test_web_speech.py -k live_voice`

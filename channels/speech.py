@@ -36,10 +36,14 @@ class SpeechService:
                   "set — English falls back to the default voice",
                   file=sys.stderr)
             self.tts_model_en = self.voice_en = None
+        # Optional bearer token for a speech service that requires one.
+        # Unset → no Authorization header, exactly as before.
+        key = optional_env("SPEECH_API_KEY")
+        self.headers = {"Authorization": f"Bearer {key}"} if key else {}
         self.enabled = False
         if self.url and self.stt_model and self.tts_model and self.voice:
             try:
-                httpx.get(f"{self.url}/v1/models",
+                httpx.get(f"{self.url}/v1/models", headers=self.headers,
                           timeout=3.0).raise_for_status()
                 self.enabled = True
             except httpx.HTTPError:
@@ -53,7 +57,7 @@ class SpeechService:
                 f"{self.url}/v1/audio/transcriptions",
                 files={"file": (filename, audio, content_type)},
                 data={"model": self.stt_model, "language": lang},
-                timeout=60.0)
+                headers=self.headers, timeout=60.0)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise SpeechUnavailable(str(exc)) from exc
@@ -68,7 +72,7 @@ class SpeechService:
                 f"{self.url}/v1/audio/speech",
                 json={"model": model, "voice": voice,
                       "input": text, "language": lang},
-                timeout=60.0)
+                headers=self.headers, timeout=60.0)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise SpeechUnavailable(str(exc)) from exc
