@@ -359,20 +359,6 @@ def test_tts_en_session_without_en_pair_falls_back(stack):
         ("stub-tts", "stub-voice")
 
 
-def test_tts_half_configured_en_pair_falls_back(stack):
-    # ponytail: both-or-neither via a spot re-instantiation of the service
-    # (a fourth full app boot would fight the shared app.state for one env
-    # permutation; the service object is the unit that owns the rule).
-    os.environ["SPEECH_TTS_MODEL_EN"] = "stub-tts-en"
-    try:
-        from channels.speech import SpeechService
-        service = SpeechService()
-        service.tts("Hallo", "en")
-    finally:
-        os.environ.pop("SPEECH_TTS_MODEL_EN", None)
-    assert stack["speech"].tts_requests[-1] == ("stub-tts", "stub-voice")
-
-
 @pytest.fixture(scope="module")
 def stack_en(stack):
     os.environ.update({
@@ -394,4 +380,24 @@ def test_tts_en_session_uses_en_pair(stack_en):
 
 def test_tts_de_session_keeps_default_pair(stack_en):
     assert _tts(stack_en["url"], stack_en["speech"], "de") == \
+        ("stub-tts", "stub-voice")
+
+
+@pytest.fixture(scope="module")
+def stack_half(stack, stack_en):
+    # Boots LAST: MODEL_EN present, VOICE_EN absent — the half-configured
+    # pair. Depends on stack_en so its tests are done before this re-boot
+    # replaces the shared app.state again.
+    os.environ["SPEECH_TTS_MODEL_EN"] = "stub-tts-en"
+    os.environ.pop("SPEECH_TTS_VOICE_EN", None)
+    from channels import web
+    server, url = run_server(web.app)
+    yield {"speech": stack["speech"], "url": url}
+    server.should_exit = True
+    os.environ.pop("SPEECH_TTS_MODEL_EN", None)
+
+
+def test_tts_half_configured_en_pair_falls_back(stack_half):
+    # Through the real web channel: /session -> /language -> /speech/tts.
+    assert _tts(stack_half["url"], stack_half["speech"], "en") == \
         ("stub-tts", "stub-voice")
