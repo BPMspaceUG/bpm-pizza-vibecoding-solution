@@ -1,0 +1,37 @@
+{
+  "name": "spoken_happy_saved_street_still_confirms_name",
+  "fake": "ok",
+  "turns": [
+    {"user": "Eine Diavolo bitte, hier ist Marko.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "diavolo", "qty": 1, "extras": []}]}},
+       {"tool": "lookup_customer", "args": {"first_name": "Marko"}},
+       {"say": "Habe ich Ihren Namen richtig verstanden: Marko?"}
+     ]},
+    {"user": "Ja, Marko.",
+     "script": [
+       {"say": "Danke, Marko. Soll ich wieder an Ihre gespeicherte Adresse liefern?"}
+     ]},
+    {"user": "Ja bitte.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Marko", "use_saved_street": true}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Marko, gespeicherte Adresse — eine Diavolo, 11,00 €. Stimmt das?"}
+     ]},
+    {"user": "Ja.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt! Etwa 2 Minuten."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "lookup_customer", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": [],
+    "items": [{"type": "pizza", "code": "diavolo", "qty": 1}],
+    "customer_first_name": "Marko",
+    "customer_saved": true,
+    "name_confirm_before_set": true
+  }
+}

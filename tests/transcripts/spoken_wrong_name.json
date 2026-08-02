@@ -1,0 +1,32 @@
+{
+  "name": "spoken_wrong_name_corrected",
+  "fake": "ok",
+  "turns": [
+    {"user": "Eine Margherita bitte, ich bin die Efa.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "margherita", "qty": 1, "extras": []}]}},
+       {"say": "Gern. Habe ich Ihren Namen richtig verstanden: Efa?"}
+     ]},
+    {"user": "Nein, Eva mit V.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Eva", "street_one": "via Roma 1"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Danke, Eva. Eine Margherita, 8,50 € — an via Roma 1. Stimmt das?"}
+     ]},
+    {"user": "Ja.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt, Eva! Etwa 2 Minuten."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": [],
+    "items": [{"type": "pizza", "code": "margherita", "qty": 1}],
+    "customer_first_name": "Eva",
+    "set_customer_calls": 1,
+    "name_confirm_before_set": true
+  }
+}

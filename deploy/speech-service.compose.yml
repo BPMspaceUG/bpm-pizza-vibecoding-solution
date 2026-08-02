@@ -1,0 +1,27 @@
+# Self-hosted, CPU-only speech service for the PizzaSim ordering agent.
+#
+# Neutral by design (SPEC): the image and the models are operator
+# configuration — no vendor or model names live in this repository.
+# Whatever image the operator picks MUST expose an OpenAI-compatible
+# surface on its HTTP port:
+#
+#   POST /v1/audio/transcriptions   multipart: file, model, language -> {"text": ...}
+#   POST /v1/audio/speech           JSON: model, voice, input -> audio bytes
+#   GET  /v1/models                 2xx = alive (used by the app's startup probe)
+#
+# The app and this service are deployed together as first-party artifacts;
+# the app reaches it via SPEECH_URL (e.g. http://speech:8000 on a shared
+# network, or the routed URL). Voice-capable deployments serve the app
+# over HTTPS on a real host name — microphone capture does not exist on
+# plain HTTP (SPEC).
+services:
+  speech:
+    image: ${SPEECH_IMAGE}
+    restart: unless-stopped
+    # CPU-only on purpose: no GPU reservations, modest resources.
+    environment:
+      - SPEECH_STT_MODEL=${SPEECH_STT_MODEL}
+      - SPEECH_TTS_MODEL=${SPEECH_TTS_MODEL}
+      - SPEECH_TTS_VOICE=${SPEECH_TTS_VOICE}
+    expose:
+      - "${SPEECH_CONTAINER_PORT:-8000}"

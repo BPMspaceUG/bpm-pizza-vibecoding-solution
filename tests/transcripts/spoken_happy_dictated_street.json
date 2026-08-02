@@ -1,0 +1,32 @@
+{
+  "name": "spoken_happy_dictated_street_confirms_name",
+  "fake": "ok",
+  "turns": [
+    {"user": "Zwei Margherita, ich heiße Nina, via Milano 3.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "margherita", "qty": 2, "extras": []}]}},
+       {"tool": "lookup_customer", "args": {"first_name": "Nina"}},
+       {"say": "Habe ich Ihren Namen richtig verstanden: Nina?"}
+     ]},
+    {"user": "Ja, Nina.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Nina", "street_one": "via Milano 3"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Nina, via Milano 3 — zwei Margherita, 17,00 €. Stimmt das?"}
+     ]},
+    {"user": "Ja.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt! Etwa 2 Minuten."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "lookup_customer", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": [],
+    "items": [{"type": "pizza", "code": "margherita", "qty": 2}],
+    "customer_first_name": "Nina",
+    "name_confirm_before_set": true
+  }
+}

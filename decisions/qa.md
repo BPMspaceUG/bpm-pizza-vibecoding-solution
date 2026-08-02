@@ -74,3 +74,15 @@ acceptance test with DE+EN audio fixtures as the release-gating proof
 (manual demo is a release-note aid only), name-confirmation regression
 against ghost customers; deliverables + locked-decision row added;
 telephony stays deferred. No plan, no implementation (operator hold).
+
+## 2026-08-02 — Offline voice E2E runs on Firefox fake streams
+
+**Why:** headless Chromium on this host exposes no audio device even with
+--use-fake-device-for-media-capture (verified empirically; enumerateDevices
+empty). Firefox's media.navigator.streams.fake needs no audio backend and
+exercises the identical UI path (getUserMedia + MediaRecorder + upload).
+Spec-aligned: the product is required to work cross-browser. The recorded
+WAV fixtures drive the LIVE voice acceptance test via Chromium's
+--use-file-for-fake-audio-capture on the voice-capable deployment, where
+the transcript content matters. Deviation from the plan's Chromium-flag
+wording documented here for the implementation review.

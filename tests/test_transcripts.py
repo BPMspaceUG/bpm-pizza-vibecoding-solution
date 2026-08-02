@@ -93,11 +93,14 @@ def test_golden_transcript(path):
                       client=client)
     agent = Agent(config, chat_fn=stub)
 
-    calls, error_codes = [], []
+    calls, error_codes, ordered = [], [], []
 
     def emit(event):
         if event["type"] == "tool_call":
             calls.append(event["tool"])
+            ordered.append(("call", event["tool"]))
+        if event["type"] == "assistant":
+            ordered.append(("say", event["text"]))
         if event["type"] == "tool_result" and "error" in event["result"]:
             error_codes.append(event["result"]["error"]["code"])
 
@@ -124,10 +127,25 @@ def test_golden_transcript(path):
             # redaction: the saved street never enters the model context
             assert "Meyer Teststraße" not in json.dumps(
                 session.messages, ensure_ascii=False)
+    if "customer_first_name" in expect:
+        assert session.order.customer.first_name == \
+            expect["customer_first_name"]
+    if "set_customer_calls" in expect:
+        assert calls.count("set_customer") == expect["set_customer_calls"]
+    if expect.get("name_confirm_before_set"):
+        # the spoken name is confirmed BEFORE the customer is stored —
+        # the ghost-customer guard for voice flows
+        confirm_idx = next(i for i, (kind, value) in enumerate(ordered)
+                           if kind == "say"
+                           and "richtig verstanden" in value)
+        set_idx = next(i for i, (kind, value) in enumerate(ordered)
+                       if kind == "call" and value == "set_customer")
+        assert confirm_idx < set_idx
 
 
 def test_transcripts_exist():
-    assert len(TRANSCRIPTS) == 7  # five v1 flows + saved-address pair
+    # five v1 flows + saved-address pair + three name-confirmation cases
+    assert len(TRANSCRIPTS) == 10
 
 
 def test_gateway_timeout_apology():

@@ -56,7 +56,28 @@ Then open <a href="http://127.0.0.1:8888" target="_blank">http://127.0.0.1:8888<
   and any error, timeout, or unanswered turn leaves a plain-language
   notice with a resend button.
 
-## Speech (web only, optional)
+## Voice deployment
+
+Voice is a required capability of a production release (SPEC); text-only
+is the degraded mode for dev/test and outages. To deploy voice:
+
+1. Provision the self-hosted speech service next to the app —
+   `deploy/speech-service.compose.yml` is the neutral definition; the
+   image and models are operator configuration (`SPEECH_IMAGE`,
+   `SPEECH_*`), never named in this repository.
+2. Serve the app over **HTTPS on a real host name** (e.g. via the
+   platform's proxy). Microphone capture does not exist on plain HTTP —
+   the UI hides all voice controls outside a secure context.
+3. Set `SPEECH_URL`, `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL`,
+   `SPEECH_TTS_VOICE` on the app. STT/TTS use the session language.
+4. Release-gating proof: run the live voice acceptance test against the
+   deployment —
+   `PIZZA_LIVE_VOICE=1 PIZZA_LIVE_VOICE_URL=https://<domain> venv/bin/python -m pytest tests/test_web_speech.py -k live_voice`
+   (drives the real page with recorded spoken-order fixtures through
+   microphone capture, real STT, the confirm control and real TTS, then
+   verifies the order via the API).
+
+## Speech (web only, optional in dev)
 
 Set `SPEECH_URL`, `SPEECH_STT_MODEL`, `SPEECH_TTS_MODEL` and
 `SPEECH_TTS_VOICE` to a self-hosted OpenAI-compatible speech service. The

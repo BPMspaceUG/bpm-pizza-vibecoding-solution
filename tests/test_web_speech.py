@@ -198,6 +198,84 @@ def test_e2e_runtime_speech_outage_degrades_to_text(voice_page_factory,
     page.close()
 
 
+# --- live voice acceptance (opt-in, release-gating per SPEC) ---------------
+
+LIVE_VOICE = (os.environ.get("PIZZA_LIVE_VOICE") == "1"
+              and bool(os.environ.get("PIZZA_LIVE_VOICE_URL")))
+
+
+@pytest.mark.skipif(not LIVE_VOICE,
+                    reason="live voice test only with PIZZA_LIVE_VOICE=1 "
+                           "and PIZZA_LIVE_VOICE_URL=<https deployment>")
+@pytest.mark.parametrize("lang,fixture,name_reply,yes", [
+    ("de", "order.de.wav", "Ich heiße VoiceTest", "Ja"),
+    ("en", "order.en.wav", "My name is VoiceTest", "Yes"),
+])
+def test_live_voice_acceptance(lang, fixture, name_reply, yes):
+    """The voice agent actually works: real browser over HTTPS, real
+    microphone capture (fake device streaming the spoken-order fixture),
+    real STT, the confirm control, real TTS — then the order is verified
+    via the pizzeria's API endpoints. Not a text replay: if STT does not
+    produce an order-driving transcript, this test fails."""
+    from playwright.sync_api import sync_playwright
+
+    from core.pizzasim import PizzaSim
+
+    base_url = os.environ["PIZZA_LIVE_VOICE_URL"]
+    wav = str((AUDIO / fixture).resolve())
+    tts_audio = {"bytes": 0}
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=[
+            "--use-fake-device-for-media-capture",
+            "--use-fake-ui-for-media-capture",
+            f"--use-file-for-fake-audio-capture={wav}",
+        ])
+        context = browser.new_context()
+        context.grant_permissions(["microphone"], origin=base_url)
+        page = context.new_page()
+
+        def sniff(response):
+            if response.url.endswith("/speech/tts") and response.ok:
+                tts_audio["bytes"] = len(response.body())
+        page.on("response", sniff)
+
+        page.goto(base_url, timeout=60000)
+        page.wait_for_selector(".msg.assistant", timeout=120000)
+        if lang == "en":
+            page.locator("#lang-switch button[data-lang=en]").click()
+        assert page.locator("#mic").is_visible()  # HTTPS + speech up
+        page.check("#tts-toggle")
+
+        page.click("#mic")
+        page.wait_for_selector("#mic.recording", timeout=15000)
+        page.wait_for_timeout(7000)  # the fixture is ~5.5s of speech
+        page.click("#mic")
+        # STT must yield an order-driving transcript: the basket fills.
+        page.wait_for_selector("#basket-lines li", timeout=120000)
+
+        page.fill("#text", name_reply)
+        page.click("#send")
+        page.wait_for_selector(".readback button:enabled", timeout=120000)
+        page.locator(".readback button:enabled").click()
+        page.wait_for_selector("#submitted-banner:not([hidden])",
+                               timeout=120000)
+        page.wait_for_timeout(2000)  # allow the final TTS fetch
+        assert tts_audio["bytes"] > 0  # real, non-empty playable audio
+        pizzeria_id = page.locator("#uuid").inner_text().strip()
+        banner = page.locator("#submitted-banner").inner_text()
+        order_id = banner.split()[-1]
+        browser.close()
+
+    # verify via the API: right customer, items present, right tenant
+    client = PizzaSim.from_env().for_pizzeria(pizzeria_id)
+    listed = {o["id"] for o in client.list_orders()}
+    assert order_id in listed
+    detail = client.get_order(order_id)
+    assert detail["customer"]["first_name"] == "VoiceTest"
+    assert detail["items"], "order carries no items"
+
+
 def test_e2e_insecure_context_renders_no_voice_ui(voice_page_factory,
                                                   stack):
     """Plain HTTP never presents a voice-capable UI — even with speech
