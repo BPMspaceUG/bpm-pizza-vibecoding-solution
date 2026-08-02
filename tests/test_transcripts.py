@@ -71,6 +71,11 @@ class ScriptedClient:
                 "customer": self._customer,
                 "items": self._items}
 
+    def list_customers(self):
+        return [{"id": "c-1", "first_name": "Marko",
+                 "street_one": "Meyer Teststraße 4", "street_two": None,
+                 "created_at": 1, "deleted_at": None}]
+
     def check_street(self, street):
         return {"street": street, "deliverable": True}
 
@@ -112,10 +117,17 @@ def test_golden_transcript(path):
         assert session.order.result["order_id"] == expect["order_id"]
     if expect["state"] == "SUBMITTED":
         assert session.order.result["order_id"]
+    if "customer_saved" in expect:
+        assert session.order.customer.street_from_saved == \
+            expect["customer_saved"]
+        if expect["customer_saved"]:
+            # redaction: the saved street never enters the model context
+            assert "Meyer Teststraße" not in json.dumps(
+                session.messages, ensure_ascii=False)
 
 
-def test_five_transcripts_exist():
-    assert len(TRANSCRIPTS) == 5
+def test_transcripts_exist():
+    assert len(TRANSCRIPTS) == 7  # five v1 flows + saved-address pair
 
 
 def test_gateway_timeout_apology():

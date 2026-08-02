@@ -1,0 +1,31 @@
+{
+  "name": "saved_address_reuse",
+  "fake": "ok",
+  "turns": [
+    {"user": "Eine Margherita bitte, ich heiße Marko.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "margherita", "qty": 1, "extras": []}]}},
+       {"tool": "lookup_customer", "args": {"first_name": "Marko"}},
+       {"say": "Gern, Marko. Soll ich wieder an Ihre gespeicherte Adresse liefern?"}
+     ]},
+    {"user": "Ja, an die gespeicherte Adresse.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Marko", "use_saved_street": true}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Marko, gespeicherte Adresse — eine Margherita, 8,50 €. Stimmt das?"}
+     ]},
+    {"user": "Ja.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt! Etwa 2 Minuten."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "lookup_customer", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": [],
+    "items": [{"type": "pizza", "code": "margherita", "qty": 1}],
+    "customer_saved": true
+  }
+}

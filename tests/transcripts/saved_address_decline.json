@@ -1,0 +1,31 @@
+{
+  "name": "saved_address_declined_fallback",
+  "fake": "ok",
+  "turns": [
+    {"user": "Eine Funghi bitte, ich heiße Marko.",
+     "script": [
+       {"tool": "add_items", "args": {"items": [{"type": "pizza", "code": "funghi", "qty": 1, "extras": []}]}},
+       {"tool": "lookup_customer", "args": {"first_name": "Marko"}},
+       {"say": "Gern, Marko. Soll ich wieder an Ihre gespeicherte Adresse liefern?"}
+     ]},
+    {"user": "Nein, bitte neu: via Nuova 2.",
+     "script": [
+       {"tool": "set_customer", "args": {"first_name": "Marko", "street_one": "via Nuova 2"}},
+       {"tool": "read_back", "args": {}},
+       {"say": "Marko, via Nuova 2 — eine Funghi, 9,00 €. Stimmt das?"}
+     ]},
+    {"user": "Ja.",
+     "script": [
+       {"tool": "confirm_order", "args": {"revision": 2}},
+       {"tool": "submit_order", "args": {}},
+       {"say": "Bestellt! Etwa 2 Minuten."}
+     ]}
+  ],
+  "expect": {
+    "state": "SUBMITTED",
+    "calls": ["add_items", "lookup_customer", "set_customer", "read_back", "confirm_order", "submit_order"],
+    "error_codes": [],
+    "items": [{"type": "pizza", "code": "funghi", "qty": 1}],
+    "customer_saved": false
+  }
+}

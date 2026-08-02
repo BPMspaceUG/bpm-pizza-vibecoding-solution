@@ -23,6 +23,7 @@ const I18N = {
     total: "Summe",
     extrasNote: "Extras sind nicht separat bepreist.",
     submitted: "Bestellung abgeschickt — Nummer:",
+    savedAddress: "gespeicherte Adresse",
     confirm: "Bestellung bestätigen",
     placeholder: "Nachricht schreiben …",
     send: "Senden",
@@ -50,6 +51,7 @@ const I18N = {
     total: "Total",
     extrasNote: "Extras are not separately priced.",
     submitted: "Order submitted — number:",
+    savedAddress: "saved address",
     confirm: "Confirm order",
     placeholder: "Type a message …",
     send: "Send",
@@ -169,8 +171,10 @@ function showReadback(snapshot) {
     .join("\n");
   const who = snapshot.customer
     ? `${snapshot.customer.first_name}` +
-      (snapshot.customer.street_one
-        ? `, ${snapshot.customer.street_one}` : "")
+      (snapshot.customer.street_on_file
+        ? `, ${t("savedAddress")}`  // never the saved text (SPEC redaction)
+        : snapshot.customer.street_one
+          ? `, ${snapshot.customer.street_one}` : "")
     : "";
   panel.textContent =
     `${who}\n${list}\n${t("total")}: ${euro(snapshot.basket_total)}`;
