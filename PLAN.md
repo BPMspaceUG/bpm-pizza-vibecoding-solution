@@ -418,10 +418,13 @@ Core:
 Tests (ticket introduces them):
 
 - lookup known / unknown / deleted / API-error (error non-fatal).
-- `use_saved_street` copies in code; submit body carries the real street
-  while snapshot, all emitted events and the JSONL log for the same turn
-  contain no fragment of it (redaction asserted by string-scanning every
-  event and log line for the fixture street).
+- `use_saved_street` copies in code; the redaction sweep is end to end:
+  after the full flow, the fixture street text must appear in exactly one
+  place — the outbound submit payload (captured via a client spy) — and in
+  no snapshot, no emitted event, no JSONL log line, and **no entry of
+  `session.messages`** (the model-visible tool-message serialization is
+  string-scanned too; an implementation that leaks the street into tool
+  content the model reads must fail this test).
 - Mutual exclusion + `no_saved_street` paths.
 - Two new golden transcripts: saved-address reuse (lookup → confirm
   question → flag-based set_customer → order) and decline/fallback
@@ -456,35 +459,51 @@ Offline tests:
   unconfigured (existing behaviour, kept).
 - Browser E2E (Playwright, localhost = secure context, fake media device
   flags `--use-fake-device-for-media-capture` +
-  `--use-fake-ui-for-media-capture`, microphone permission granted):
-  mic button and TTS toggle visible; push-to-talk click-start/click-stop
-  records via real `MediaRecorder`, uploads to the stub, transcript
+  `--use-fake-ui-for-media-capture` +
+  `--use-file-for-fake-audio-capture=<fixture wav>`, microphone
+  permission granted): mic button and TTS toggle visible; push-to-talk
+  click-start/click-stop records via real `MediaRecorder` (the fake
+  device streams the audio fixture), uploads to the stub, transcript
   drives a turn (`spoken: true` asserted via the stub gateway seeing the
   spoken-style note); with the toggle ON, exactly one TTS fetch per turn
   and only for the final assistant message (StubSpeech call counter);
-  toggle OFF by default. Fallback (documented, only if fake-device
-  recording proves flaky in CI-like runs): keep visibility + toggle
-  assertions in the browser and the recording round trip at API level.
-- Name-confirmation regression: golden transcript where the (spoken)
-  name is plausible-but-wrong; script asserts the agent's read-back turn
-  happens and `set_customer` is called exactly once, with the corrected
-  name, only after the customer's correction — no submit before that.
+  toggle OFF by default. This real UI push-to-talk path is mandatory —
+  API-level speech tests supplement it and never substitute for it.
+- Name-confirmation regression, three scripted cases (the saved-address
+  question is **not** a substitute for name confirmation):
+  1. plausible-but-wrong spoken name: agent repeats the name back, the
+     customer corrects, `set_customer` is called exactly once with the
+     corrected name, only after the correction — no submit before that;
+  2. spoken happy path, dictated street: the name is confirmed before
+     submission;
+  3. spoken happy path, saved street reused: the name is confirmed before
+     submission *in addition to* the saved-address yes/no question.
+  Prompts (both languages) state explicitly: in spoken conversations the
+  first name is always confirmed before the order is submitted.
 
 Live proof (opt-in, release-gating per SPEC):
 
-- `PIZZA_LIVE_VOICE=1` + configured `SPEECH_URL`: send
-  `order.de.wav`/`order.en.wav` through the real `/v1/audio/transcriptions`,
-  feed the transcript through the app's web path (session → chat →
-  confirm), verify the four acceptance points via list+detail endpoints.
-  Skipped (like the live acceptance test) when not configured; it cannot
-  run on the current dev VPS (no speech service, no HTTPS) and is
-  executed on the voice-capable deployment.
+- `PIZZA_LIVE_VOICE=1` + `PIZZA_LIVE_VOICE_URL=<https base url of the
+  voice-capable deployment>`: a real headless browser drives the real
+  page over HTTPS end to end — microphone capture via the fake media
+  device streaming `order.de.wav` / `order.en.wav` (Chromium
+  `--use-file-for-fake-audio-capture`), real STT through the deployed
+  speech service, the transcript drives the chat, the confirm control
+  places the order, and with the toggle ON the final assistant message
+  fetches real TTS audio (response is non-empty browser-playable audio).
+  The four acceptance points are then verified via the pizzeria's
+  list+detail API endpoints. Not a text replay: if STT does not produce
+  an order-driving transcript from the fixture, the test fails. Skipped
+  cleanly when the env vars are unset; it cannot run on the current dev
+  VPS (no speech service, no HTTPS) and is executed against the
+  voice-capable deployment.
 
 ## C. Tickets (≤1h each)
 
 1. Street-lookup core (client, Customer redaction split, tools, unit
    tests incl. redaction sweep). ☐ booleans-only lookup ☐ submit carries
-   real street ☐ no saved-street text in events/logs.
+   real street ☐ no saved-street text in events, logs or
+   session.messages.
 2. Street-lookup conversation (prompts DE/EN, two golden transcripts, UI
    label). ☐ confirm-without-disclosure flow ☐ decline fallback.
 3. StubSpeech + audio fixtures + API-level speech tests. ☐ stt round
