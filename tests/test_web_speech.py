@@ -336,6 +336,53 @@ def test_e2e_insecure_context_renders_no_voice_ui(voice_page_factory,
     page.close()
 
 
+
+# --- spoken read_back: no confirm button (issue #12) -----------------------
+
+def test_e2e_spoken_readback_hides_button_and_voice_completes(
+        voice_page_factory, stack):
+    """The turn that produced the read_back was mic-driven: no confirm
+    button; the customer confirms verbally and the model completes the
+    order conversationally."""
+    stack["gateway"].mode = "ok"
+    stack["speech"].transcript = "Ich heiße Eva"
+    page = open_app(voice_page_factory, stack)
+    page.fill("#text", "Zwei Margherita bitte")
+    page.click("#send")
+    page.wait_for_selector("#basket-lines li", timeout=30000)
+    page.click("#mic")
+    page.wait_for_selector("#mic.recording", timeout=10000)
+    page.wait_for_timeout(1200)
+    page.click("#mic")  # spoken turn: set_customer -> read_back
+    page.wait_for_selector(".readback", timeout=30000)
+    assert page.locator(".readback button").count() == 0
+    stack["speech"].transcript = "Ja, bestellen bitte"
+    page.click("#mic")
+    page.wait_for_selector("#mic.recording", timeout=10000)
+    page.wait_for_timeout(1200)
+    page.click("#mic")  # spoken yes: confirm_order -> submit_order
+    page.wait_for_selector("#submitted-banner:not([hidden])", timeout=30000)
+    page.close()
+
+
+def test_e2e_typed_readback_keeps_button_after_mic_turn(voice_page_factory,
+                                                        stack):
+    """Mixed conversation: a mic turn earlier does not make the session
+    sticky — a TYPED turn producing the read_back renders the button."""
+    stack["gateway"].mode = "ok"
+    stack["speech"].transcript = "Zwei Margherita bitte"
+    page = open_app(voice_page_factory, stack)
+    page.click("#mic")
+    page.wait_for_selector("#mic.recording", timeout=10000)
+    page.wait_for_timeout(1200)
+    page.click("#mic")  # spoken basket turn (no read_back)
+    page.wait_for_selector("#basket-lines li", timeout=30000)
+    page.fill("#text", "Ich heiße Eva")
+    page.click("#send")  # typed turn -> read_back
+    page.wait_for_selector(".readback button:enabled", timeout=30000)
+    page.close()
+
+
 # --- per-language TTS voice (issue #11) ------------------------------------
 # Order matters: the fallback cases run against the base stack FIRST; the
 # EN stack then re-boots the shared app object with the EN pair configured

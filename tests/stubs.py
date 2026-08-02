@@ -208,6 +208,19 @@ def _script_impl(messages: list[dict]) -> dict:
     if not users:
         return {"content": "Willkommen! Was darf es sein?"}
     text = users[-1]["content"].lower()
+    if "ja, bestellen" in text or "yes, order" in text:
+        # explicit yes after a read_back: the model confirms the revision
+        # it read back (extracted from the tool history, like a real model)
+        for m in reversed(messages):
+            if m.get("role") == "tool":
+                try:
+                    content = json.loads(m["content"])
+                except (ValueError, TypeError):
+                    continue
+                revision = (content.get("snapshot") or {}).get("revision")
+                if isinstance(revision, int):
+                    return _tool_call("confirm_order", {"revision": revision})
+        return {"content": "Ich habe noch nichts vorgelesen."}
     if "kostet" in text or "cost" in text:
         return _tool_call("get_menu", {})
     if "bolognese" in text:

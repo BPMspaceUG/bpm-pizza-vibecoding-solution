@@ -163,6 +163,8 @@ function disableConfirm() {
   });
 }
 
+let turnSpoken = false;  // input modality of the in-flight turn
+
 function showReadback(snapshot) {
   disableConfirm();
   const panel = document.createElement("div");
@@ -179,10 +181,15 @@ function showReadback(snapshot) {
     : "";
   panel.textContent =
     `${who}\n${list}\n${t("total")}: ${euro(snapshot.basket_total)}`;
-  const btn = document.createElement("button");
-  btn.textContent = t("confirm");
-  btn.onclick = () => { btn.disabled = true; confirmOrder(snapshot.revision); };
-  panel.appendChild(btn);
+  if (!turnSpoken) {
+    // A mic-driven read_back is confirmed verbally (the model drives
+    // confirm/submit on an explicit yes) — no button, no double confirm.
+    const btn = document.createElement("button");
+    btn.textContent = t("confirm");
+    btn.onclick = () => { btn.disabled = true;
+                          confirmOrder(snapshot.revision); };
+    panel.appendChild(btn);
+  }
   chat.appendChild(panel);
   chat.scrollTop = chat.scrollHeight;
 }
@@ -287,6 +294,7 @@ async function streamPost(path, body, retry) {
 }
 
 async function sendTurn(text, spoken = false) {
+  turnSpoken = spoken;
   if (text !== null) addMsg("user", text);
   const finalText = await streamPost(
     "/chat", { session_id: session.id, text, spoken }, text ?? undefined);
@@ -297,6 +305,7 @@ async function confirmOrder(revision) {
   // The retry re-runs the confirm with the SAME revision: if the first
   // attempt actually went through, the state machine refuses it and the
   // agent says so — never a second order.
+  turnSpoken = false;
   const finalText = await streamPost(
     "/confirm", { session_id: session.id, revision },
     () => confirmOrder(revision));
