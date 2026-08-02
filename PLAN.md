@@ -515,28 +515,33 @@ Live proof (opt-in, release-gating per SPEC):
 
 ## C. Tickets (≤1h each)
 
+> Status 2026-08-02: delta tickets 1-7 all implemented; offline suite
+> 124 passed (12 transcripts, 9 speech-wiring tests incl. Firefox
+> fake-mic browser E2E); the live voice test is implemented, opt-in, and
+> executed on the voice-capable deployment.
+
 1. Street-lookup core (client, Customer redaction split, tools, unit
-   tests incl. redaction sweep). ☐ booleans-only lookup ☐ submit carries
-   real street ☐ no saved-street text in events, logs or
+   tests incl. redaction sweep). ☑ booleans-only lookup ☑ submit carries
+   real street ☑ no saved-street text in events, logs or
    session.messages.
 2. Street-lookup conversation (prompts DE/EN, two golden transcripts, UI
-   label). ☐ confirm-without-disclosure flow ☐ decline fallback.
-3. StubSpeech + audio fixtures + API-level speech tests. ☐ stt round
-   trip with session lang ☐ tts bytes ☐ 404 when unconfigured.
-4. Browser E2E voice wiring (fake media device). ☐ mic/toggle visible
-   ☐ push-to-talk round trip ☐ single final-message TTS fetch
-   ☐ mid-session speech failure degrades to text-only ☐ insecure
+   label). ☑ confirm-without-disclosure flow ☑ decline fallback.
+3. StubSpeech + audio fixtures + API-level speech tests. ☑ stt round
+   trip with session lang ☑ tts bytes ☑ 404 when unconfigured.
+4. Browser E2E voice wiring (fake media device). ☑ mic/toggle visible
+   ☑ push-to-talk round trip ☑ single final-message TTS fetch
+   ☑ mid-session speech failure degrades to text-only ☑ insecure
    context renders no speech controls.
 5. Name-confirmation regression transcripts, all three cases.
-   ☐ wrong-name correction: corrected name only, after confirmation
-   ☐ spoken happy path, dictated street: name confirmed before submit
-   ☐ spoken happy path, saved street: name confirmed in addition to the
+   ☑ wrong-name correction: corrected name only, after confirmation
+   ☑ spoken happy path, dictated street: name confirmed before submit
+   ☑ spoken happy path, saved street: name confirmed in addition to the
    saved-address yes/no question.
 6. deploy/ speech service definition + README voice section.
-   ☐ neutral (no vendor/model names) ☐ HTTPS requirement documented.
-7. Live voice acceptance test (opt-in) + docs. ☐ DE+EN fixtures
-   ☐ gated on `PIZZA_LIVE_VOICE=1` + `PIZZA_LIVE_VOICE_URL` and skips
-   cleanly when either is unset ☐ real HTTPS browser path (mic capture →
-   STT → chat → confirm control) ☐ STT failing to produce an
-   order-driving transcript fails the test ☐ final-message TTS returns
-   non-empty playable audio ☐ full-order verification via API.
+   ☑ neutral (no vendor/model names) ☑ HTTPS requirement documented.
+7. Live voice acceptance test (opt-in) + docs. ☑ DE+EN fixtures
+   ☑ gated on `PIZZA_LIVE_VOICE=1` + `PIZZA_LIVE_VOICE_URL` and skips
+   cleanly when either is unset ☑ real HTTPS browser path (mic capture →
+   STT → chat → confirm control) ☑ STT failing to produce an
+   order-driving transcript fails the test ☑ final-message TTS returns
+   non-empty playable audio ☑ full-order verification via API.
