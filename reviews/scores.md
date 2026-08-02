@@ -171,3 +171,8 @@ Round 24: 18/25 CHANGES_REQUIRED (editorial: transcript fixtures in the
 redaction sweep, ticket 5/7 checkboxes aligned with prose — applied
 post-gate). Stage stopped after max 3 rounds per SPEC protocol; open
 verdict surfaced to the operator.
+
+## Round 25 — Delta Plan v3 gate, operator-ordered fresh round (Issue #3)
+
+completeness: 5, correctness: 4, error_handling: 4, simplicity: 4,
+spec_compliance: 5 — TOTAL 22/25, VERDICT: APPROVED.
