@@ -366,3 +366,134 @@ verbatim-price rule), `README.md`, `.env.example` (+`APP_VERSION`),
 
 Review protocol: this plan goes to the reviewer (Issue gate) before any
 code; implementation follows only after APPROVED under the SPEC rubric.
+
+
+---
+
+# Delta Plan v3 — Street lookup + Voice (SPEC rev d851966)
+
+> Stage-1 artifact for the two SPEC extensions committed after v1.0.0:
+> returning-customer street reuse (confirm-without-disclosure) and voice as
+> a required release capability. Design only — no code before the gate
+> approves. Everything in Plan v2 above stands; this section only adds.
+
+## A. Street lookup (SPEC: lookup_customer / use_saved_street / redaction)
+
+Core:
+
+- `core/pizzasim.py`: `list_customers()` → `GET /pizzerias/{id}/customers`
+  → `customers[]`. Customers with `deleted_at != null` are treated as
+  nonexistent everywhere.
+- `core/order.py`: `Customer` gains `street_from_saved: bool = False`.
+  Two serializations, one redaction rule:
+  - `as_dict()` (used by SNAPSHOT, hence by every tool result, streamed
+    event, transcript and log line): when `street_from_saved`, it carries
+    `{"first_name", "street_one": null, "street_on_file": true}` — the
+    saved text never appears. A street the customer dictated themselves is
+    echoed as before (`street_on_file` absent/false).
+  - `as_submit_dict()` (used only to build the POST /orders body): always
+    the real `street_one`. Submit uses saved `street_one` only — never
+    `street_two` (SPEC guardrail).
+- `core/tools.py`:
+  - New tool `lookup_customer` `{first_name}` →
+    `{"customer_exists": bool, "saved_street_available": bool, "snapshot"}`
+    — booleans only, no street text, no customer id. API failure → the
+    uniform error shape with code `api_unavailable` (non-fatal; the model
+    falls back to asking for the street).
+  - `set_customer` params become `{first_name, street_one?,
+    use_saved_street?}` — mutually exclusive; both set → error code
+    `invalid_arguments` with a speakable message. With the flag, dispatch
+    fetches the customer record in code, copies `street_one`, sets
+    `street_from_saved`; unknown name or no saved street → error
+    `no_saved_street` (speakable), basket untouched.
+  - `_submit` switches from `as_dict()` to `as_submit_dict()`.
+- Prompts (both languages): after the name, call `lookup_customer`; if a
+  saved street exists ask exactly one confirmation question without
+  reciting the address; yes → `set_customer(use_saved_street: true)`;
+  no/unknown/error → ask for the street as before. Never state a street
+  that came from saved data.
+- Web UI: basket + read-back panel render `street_on_file` as the
+  localized label "gespeicherte Adresse"/"saved address", never text.
+
+Tests (ticket introduces them):
+
+- lookup known / unknown / deleted / API-error (error non-fatal).
+- `use_saved_street` copies in code; submit body carries the real street
+  while snapshot, all emitted events and the JSONL log for the same turn
+  contain no fragment of it (redaction asserted by string-scanning every
+  event and log line for the fixture street).
+- Mutual exclusion + `no_saved_street` paths.
+- Two new golden transcripts: saved-address reuse (lookup → confirm
+  question → flag-based set_customer → order) and decline/fallback
+  (customer says no → street asked, dictated street echoed as before).
+
+## B. Voice (SPEC: required capability; offline wiring tests + live proof)
+
+Artifacts:
+
+- `deploy/speech-service.compose.yml`: neutral, CPU-only service
+  definition — image and models come from environment placeholders
+  (`SPEECH_IMAGE`, `SPEECH_*`), no vendor or model names in the file, and
+  a comment pointing at the OpenAI-compatible surface it must expose.
+  README gains a "Voice deployment" section: HTTPS/domain requirement
+  (secure context), co-deployment with the app, env wiring.
+- `tests/fixtures/audio/`: generated spoken fixtures (offline synthesis
+  on the build host if a synthesizer is available, otherwise minimal
+  valid WAV containers) — `order.de.wav`, `order.en.wav`; used by the
+  offline round-trip (content irrelevant to the stub) and by the live
+  voice test (content = a spoken order).
+- `tests/stubs.py`: `StubSpeech` — `GET /v1/models` 200;
+  `POST /v1/audio/transcriptions` → fixed transcript (per stub script,
+  e.g. "Zwei Margherita bitte"), records the language field it received;
+  `POST /v1/audio/speech` → tiny valid audio bytes, counts calls.
+
+Offline tests:
+
+- API level (app booted with `SPEECH_*` pointing at StubSpeech):
+  `/config.speech == true`; `/speech/stt` round trip with an audio
+  fixture returns the stub transcript and passed `session.lang` as the
+  language; `/speech/tts` returns audio bytes; both 404 when speech is
+  unconfigured (existing behaviour, kept).
+- Browser E2E (Playwright, localhost = secure context, fake media device
+  flags `--use-fake-device-for-media-capture` +
+  `--use-fake-ui-for-media-capture`, microphone permission granted):
+  mic button and TTS toggle visible; push-to-talk click-start/click-stop
+  records via real `MediaRecorder`, uploads to the stub, transcript
+  drives a turn (`spoken: true` asserted via the stub gateway seeing the
+  spoken-style note); with the toggle ON, exactly one TTS fetch per turn
+  and only for the final assistant message (StubSpeech call counter);
+  toggle OFF by default. Fallback (documented, only if fake-device
+  recording proves flaky in CI-like runs): keep visibility + toggle
+  assertions in the browser and the recording round trip at API level.
+- Name-confirmation regression: golden transcript where the (spoken)
+  name is plausible-but-wrong; script asserts the agent's read-back turn
+  happens and `set_customer` is called exactly once, with the corrected
+  name, only after the customer's correction — no submit before that.
+
+Live proof (opt-in, release-gating per SPEC):
+
+- `PIZZA_LIVE_VOICE=1` + configured `SPEECH_URL`: send
+  `order.de.wav`/`order.en.wav` through the real `/v1/audio/transcriptions`,
+  feed the transcript through the app's web path (session → chat →
+  confirm), verify the four acceptance points via list+detail endpoints.
+  Skipped (like the live acceptance test) when not configured; it cannot
+  run on the current dev VPS (no speech service, no HTTPS) and is
+  executed on the voice-capable deployment.
+
+## C. Tickets (≤1h each)
+
+1. Street-lookup core (client, Customer redaction split, tools, unit
+   tests incl. redaction sweep). ☐ booleans-only lookup ☐ submit carries
+   real street ☐ no saved-street text in events/logs.
+2. Street-lookup conversation (prompts DE/EN, two golden transcripts, UI
+   label). ☐ confirm-without-disclosure flow ☐ decline fallback.
+3. StubSpeech + audio fixtures + API-level speech tests. ☐ stt round
+   trip with session lang ☐ tts bytes ☐ 404 when unconfigured.
+4. Browser E2E voice wiring (fake media device). ☐ mic/toggle visible
+   ☐ push-to-talk round trip ☐ single final-message TTS fetch.
+5. Name-confirmation regression transcript. ☐ corrected name only,
+   after confirmation.
+6. deploy/ speech service definition + README voice section.
+   ☐ neutral (no vendor/model names) ☐ HTTPS requirement documented.
+7. Live voice acceptance test (opt-in) + docs. ☐ DE+EN fixtures ☐ skips
+   cleanly without SPEECH_URL ☐ full-order verification via API.
